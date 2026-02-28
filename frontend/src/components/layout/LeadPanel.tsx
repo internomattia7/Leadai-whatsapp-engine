@@ -1,9 +1,13 @@
-import { Phone, Hash, Tag, User as UserIcon } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Phone, Hash, Tag, User as UserIcon, Pencil, Check, X } from 'lucide-react'
+import type { ReactNode } from 'react'
 import type { Chat, User as UserType } from '../../types'
+import { updateContactName } from '../../api/chats'
 
 interface LeadPanelProps {
   chat: Chat | null
   currentUser: UserType | null
+  onContactUpdated?: () => void
 }
 
 const FASE_COLORS: Record<string, string> = {
@@ -19,7 +23,17 @@ const ESITO_COLORS: Record<string, string> = {
   in_attesa: 'bg-yellow-500/20 text-yellow-400',
 }
 
-export default function LeadPanel({ chat, currentUser }: LeadPanelProps) {
+export default function LeadPanel({ chat, currentUser, onContactUpdated }: LeadPanelProps) {
+  const [editingName, setEditingName] = useState(false)
+  const [nameInput, setNameInput] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  // Sync name input when chat changes
+  useEffect(() => {
+    setNameInput(chat?.nome_cliente || '')
+    setEditingName(false)
+  }, [chat?.contact_key])
+
   if (!chat) {
     return (
       <div className="flex items-center justify-center h-full bg-surface text-muted text-sm">
@@ -28,20 +42,77 @@ export default function LeadPanel({ chat, currentUser }: LeadPanelProps) {
     )
   }
 
+  const displayName = chat.nome_cliente || chat.telefono || chat.contact_key
   const businessPhone = currentUser?.business_phone
+
+  const handleSaveName = async () => {
+    if (!nameInput.trim()) return
+    setSaving(true)
+    try {
+      await updateContactName(chat.contact_key, nameInput.trim())
+      setEditingName(false)
+      onContactUpdated?.()
+    } catch {
+      // ignore
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') handleSaveName()
+    if (e.key === 'Escape') { setEditingName(false); setNameInput(chat.nome_cliente || '') }
+  }
 
   return (
     <div className="flex flex-col h-full bg-surface p-4 gap-4 overflow-y-auto">
       <h2 className="text-sm font-semibold text-text/70 uppercase tracking-wider">Dettagli Lead</h2>
 
-      {/* Avatar + name */}
+      {/* Avatar + editable name */}
       <div className="flex flex-col items-center gap-2 py-3">
         <div className="w-14 h-14 rounded-full bg-gradient-to-br from-violet to-cyan flex items-center justify-center text-2xl font-bold text-white">
-          {(chat.nome_cliente || chat.telefono || '?')[0].toUpperCase()}
+          {displayName[0].toUpperCase()}
         </div>
-        <span className="text-base font-semibold text-text">
-          {chat.nome_cliente || chat.telefono || chat.contact_key}
-        </span>
+
+        {editingName ? (
+          <div className="flex items-center gap-1 w-full px-2">
+            <input
+              autoFocus
+              value={nameInput}
+              onChange={e => setNameInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              className="flex-1 bg-card border border-violet rounded-lg px-2 py-1 text-sm text-text text-center"
+              placeholder="Nome contatto"
+            />
+            <button
+              onClick={handleSaveName}
+              disabled={saving}
+              className="text-cyan hover:text-cyan/80 disabled:opacity-40"
+              title="Salva"
+            >
+              <Check size={15} />
+            </button>
+            <button
+              onClick={() => { setEditingName(false); setNameInput(chat.nome_cliente || '') }}
+              className="text-muted hover:text-text"
+              title="Annulla"
+            >
+              <X size={15} />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-1.5 group">
+            <span className="text-base font-semibold text-text">{displayName}</span>
+            <button
+              onClick={() => { setNameInput(chat.nome_cliente || ''); setEditingName(true) }}
+              className="text-muted opacity-0 group-hover:opacity-100 transition-opacity hover:text-violet"
+              title="Modifica nome"
+            >
+              <Pencil size={13} />
+            </button>
+          </div>
+        )}
+
         {chat.telefono && (
           <span className="text-xs text-muted">{chat.telefono}</span>
         )}
@@ -92,7 +163,6 @@ export default function LeadPanel({ chat, currentUser }: LeadPanelProps) {
   )
 }
 
-import type { ReactNode } from 'react'
 function Row({ icon, label, value, mono }: { icon: ReactNode; label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-start gap-2">

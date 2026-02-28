@@ -36,7 +36,7 @@ export default function MessageInput({ onSend, disabled }: MessageInputProps) {
   }
 
   return (
-    <div className="border-t border-border bg-surface px-4 py-3 flex items-end gap-3">
+    <div className="border-t border-border bg-surface px-4 pt-3 pb-3 flex items-end gap-3" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom, 0px))' }}>
       <button
         className="text-muted hover:text-text transition-colors mb-1"
         title="Allega file"

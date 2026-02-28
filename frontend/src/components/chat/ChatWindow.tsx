@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { MessageSquare } from 'lucide-react'
+import { MessageSquare, ArrowLeft } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 import MessageInput from './MessageInput'
 import { useMessages } from '../../hooks/useMessages'
@@ -8,9 +8,10 @@ import { sendMessage, markRead } from '../../api/chats'
 
 interface ChatWindowProps {
   chat: Chat | null
+  onBack?: () => void
 }
 
-export default function ChatWindow({ chat }: ChatWindowProps) {
+export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
   const { messages, refresh } = useMessages(chat?.contact_key ?? null)
   const bottomRef = useRef<HTMLDivElement>(null)
 
@@ -47,12 +48,21 @@ export default function ChatWindow({ chat }: ChatWindowProps) {
   return (
     <div className="flex flex-col h-full bg-bg">
       {/* Chat header */}
-      <div className="px-5 py-3 border-b border-border bg-surface flex items-center gap-3">
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet to-cyan flex items-center justify-center text-sm font-bold text-white">
+      <div className="px-4 py-3 border-b border-border bg-surface flex items-center gap-3">
+        {onBack && (
+          <button
+            onClick={onBack}
+            className="md:hidden -ml-1 mr-1 p-1 text-muted hover:text-text transition-colors"
+            aria-label="Torna alla lista"
+          >
+            <ArrowLeft size={20} />
+          </button>
+        )}
+        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet to-cyan flex-shrink-0 flex items-center justify-center text-sm font-bold text-white">
           {(chat.nome_cliente || chat.telefono || '?')[0].toUpperCase()}
         </div>
-        <div>
-          <div className="text-sm font-semibold">
+        <div className="min-w-0">
+          <div className="text-sm font-semibold truncate">
             {chat.nome_cliente || chat.telefono || chat.contact_key}
           </div>
           {chat.telefono && (

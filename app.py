@@ -1862,6 +1862,9 @@ class LoginJsonIn(BaseModel):
     email: str
     password: str
 
+class UpdateContactIn(BaseModel):
+    nome_cliente: Optional[str] = None
+
 class SendMessageIn(BaseModel):
     text: str
 
@@ -2059,15 +2062,39 @@ def api_messages(contact_key: str, user=Depends(get_current_user)):
 
 @app.post("/api/chats/{contact_key:path}/send")
 def api_send(contact_key: str, body: SendMessageIn, user=Depends(get_current_user)):
-    azienda_id = user["azienda_id"]
+    user_azienda_id = user["azienda_id"]
     text = (body.text or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="Empty message")
     canonical_key = normalize_contact_key("whatsapp", contact_key)
+    phone = phone_from_key(canonical_key)
 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
+            # Find the azienda that actually owns WA credentials for this contact.
+            # Strategy: find the phone_number_id that received inbound from this contact,
+            # then look up which company_integrations row owns that phone_number_id.
+            # Falls back to the logged-in user's azienda_id if none found.
+            cur.execute(
+                """
+                SELECT ci.azienda_id
+                FROM wa_inbound_messages wim
+                JOIN company_integrations ci
+                    ON ci.wa_phone_number_id = wim.phone_number_id
+                   AND ci.channel = 'whatsapp'
+                   AND ci.is_enabled = TRUE
+                WHERE wim.from_wa = %s
+                ORDER BY wim.created_at DESC
+                LIMIT 1
+                """,
+                (phone,),
+            )
+            row = cur.fetchone()
+            send_azienda_id = row[0] if row else user_azienda_id
+            print(f"[DEBUG api_send] contact={repr(canonical_key)} phone={phone} "
+                  f"user_az={user_azienda_id} send_az={send_azienda_id}", flush=True)
+
             cur.execute(
                 """
                 INSERT INTO outbound_messages
@@ -2075,7 +2102,7 @@ def api_send(contact_key: str, body: SendMessageIn, user=Depends(get_current_use
                 VALUES (%s, 'whatsapp', %s, %s, 'queued', NOW())
                 RETURNING id
                 """,
-                (azienda_id, canonical_key, text),
+                (send_azienda_id, canonical_key, text),
             )
             msg_id = cur.fetchone()[0]
         conn.commit()
@@ -2142,6 +2169,31 @@ def api_mark_read(contact_key: str, user=Depends(get_current_user)):
     finally:
         conn.close()
     return {"ok": True, "marked": updated}
+
+
+@app.patch("/api/chats/{contact_key:path}/contact")
+def api_update_contact(contact_key: str, body: UpdateContactIn, user=Depends(get_current_user)):
+    """Update the display name of a contact (lead_contacts.nome_cliente)."""
+    canonical_key = normalize_contact_key("whatsapp", contact_key)
+    # Allow update regardless of azienda_id (the contact may belong to the sibling company)
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE lead_contacts
+                SET nome_cliente = %s, updated_at = now()
+                WHERE contact_key = %s
+                """,
+                (body.nome_cliente, canonical_key),
+            )
+            updated = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    if updated == 0:
+        raise HTTPException(status_code=404, detail="Contact not found")
+    return {"ok": True}
 
 
 @app.get("/api/settings/company")

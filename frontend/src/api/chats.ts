@@ -28,3 +28,7 @@ export async function newChat(phone: string, nome?: string): Promise<{ contact_k
 export async function saveCompanySettings(data: { business_phone?: string }): Promise<void> {
   await client.post('/settings/company', data)
 }
+
+export async function updateContactName(contactKey: string, nome_cliente: string): Promise<void> {
+  await client.patch(`/chats/${encodeURIComponent(contactKey)}/contact`, { nome_cliente })
+}
