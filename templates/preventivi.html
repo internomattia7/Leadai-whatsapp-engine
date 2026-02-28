@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Preventivi</h1>
+
+<table>
+  <thead>
+    <tr>
+      <th>Azioni</th>
+      <th>ID</th>
+      <th>Contatto</th>
+      <th>Nome</th>
+      <th>Email</th>
+      <th>Telefono</th>
+      <th>Status</th>
+      <th>Fase</th>
+      <th>Esito</th>
+      <th>Aggiornato</th>
+    </tr>
+  </thead>
+
+  <tbody>
+  {% for r in rows %}
+    <tr>
+      <td class="actions">
+        <form method="post" action="/preventivi/{{ r.contact_key }}/toggle-inviato" style="display:inline;">
+          <button type="submit"
+            class="btn-inviato {% if r.fase_preventivo == 'inviato' %}on{% else %}off{% endif %}">
+            📩 Inviato
+          </button>
+        </form>
+        {# NUOVO -> (per ora) vai direttamente a INVIATO #}
+        {# Se vuoi anche lo step "in_preparazione", ti aggiungo l'endpoint sotto #}
+
+        {% if r.fase_preventivo == "in_preparazione" %}
+          <form method="post" action="/lead/{{ r.contact_key }}/fase/inviato" style="display:inline-block">
+            <button type="submit">📤</button>
+          </form>
+
+          <form method="post" action="/lead/{{ r.contact_key }}/fase/nuovo" style="display:inline-block">
+            <button type="submit">↩️</button>
+          </form>
+        {% endif %}
+
+        {% if r.fase_preventivo == "inviato" %}
+          <form method="post" action="/lead/{{ r.contact_key}}/esito/accettato" style="display:inline-block">
+            <button type="submit">✅</button>
+          </form>
+          <form method="post" action="/lead/{{ r.contact_key }}/esito/rifiutato" style="display:inline-block">
+            <button type="submit">❌</button>
+          </form>
+          <form method="post" action="/lead/{{ r.contact_key }}/esito/in_attesa" style="display:inline-block">
+            <button type="submit">⏳</button>
+          </form>
+
+          <form method="post" action="/lead/{{ r.contact_key }}/fase/nuovo" style="display:inline-block">
+            <button type="submit">↩️</button>
+          </form>
+        {% endif %}
+      </td>
+
+      <td>{{ r.contact_id }}</td>
+      <td>{{ r.contact_key }}</td>
+      <td>{{ r.nome_cliente or "" }}</td>
+      <td>{{ r.email or "" }}</td>
+      <td>{{ r.telefono or "" }}</td>
+      <td>{{ r.status or "" }}</td>
+      <td>{{ r.fase_preventivo or "" }}</td>
+      <td>{{ r.esito_cliente or "" }}</td>
+      <td>{{ r.updated_at or "" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+
+{% endblock %}

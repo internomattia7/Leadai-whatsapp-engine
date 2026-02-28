@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Login</h2>
+
+{% if request.query_params.get('reset') == 'ok' %}
+  <div style="padding:10px; background:#d4edda; border:1px solid #c3e6cb; margin-bottom:10px;">
+    Password aggiornata ✅ Ora puoi accedere.
+  </div>
+{% endif %}
+
+<form method="post" action="/login">
+  <label>Email</label><br>
+  <input name="email" type="email" required><br><br>
+
+  <label>Password</label><br>
+  <div style="position: relative; width: 200px;">
+    <input id="password"
+           name="password"
+           type="password"
+           required
+           style="width:100%; padding-right:30px;">
+
+    <span onclick="togglePassword()"
+          style="position:absolute; right:8px; top:50%;
+                 transform:translateY(-50%);
+                 cursor:pointer;">
+        👁
+    </span>
+</div>
+
+<script>
+function togglePassword() {
+    const pwd = document.getElementById("password");
+    if (pwd.type === "password") {
+        pwd.type = "text";
+    } else {
+        pwd.type = "password";
+    }
+}
+</script>
+
+  <button type="submit">Entra</button>
+</form>
+
+<p style="margin-top:10px;">
+  <a href="/forgot-password">Password dimenticata?</a>
+</p>
+
+<p style="margin-top:12px;">
+  <a href="/register">Crea un nuovo account</a>
+</p>
+{% endblock %}

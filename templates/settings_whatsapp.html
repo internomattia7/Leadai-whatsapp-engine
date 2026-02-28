@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Impostazioni</h1>
+
+<p>Azienda ID: {{ settings.azienda_id }}</p>
+
+<p>
+  Auto reply:
+  <strong>
+    {% if settings.auto_reply_enabled %}
+      ATTIVA
+    {% else %}
+      DISATTIVA
+    {% endif %}
+  </strong>
+</p>
+
+<h2>Impostazioni Auto Reply</h2>
+
+<form method="post" action="/settings">
+
+  <div style="margin: 8px 0;">
+    <label>
+      <input type="checkbox" name="auto_reply_enabled"
+             {% if settings.auto_reply_enabled %}checked{% endif %}>
+      Attiva auto reply
+    </label>
+  </div>
+
+  <div style="margin: 8px 0;">
+    <label>Inizio risposte (HH:MM):</label><br>
+    <input type="time" name="quiet_hours_start" value="{{ settings.quiet_hours_start }}">
+  </div>
+
+  <div style="margin: 8px 0;">
+    <label>Fine risposte (HH:MM):</label><br>
+    <input type="time" name="quiet_hours_end" value="{{ settings.quiet_hours_end }}">
+  </div>
+
+  <div style="margin: 8px 0;">
+    <label>Delay risposta (secondi):</label><br>
+    <input type="number" name="auto_reply_delay_sec" min="0" value="{{ settings.auto_reply_delay_sec }}">
+  </div>
+
+  <div style="margin: 8px 0;">
+    <label>Cooldown (secondi):</label><br>
+    <input type="number" name="cooldown_sec" min="0" value="{{ settings.cooldown_sec }}">
+  </div>
+
+  <button type="submit">Salva impostazioni</button>
+
+</form>
+
+<hr>
+
+<h2>Regole</h2>
+
+<hr>
+
+<hr>
+<h2>Collegamento WhatsApp Cloud API</h2>
+
+<p>
+  Apri Meta Developers per recuperare Token, Phone Number ID e WABA ID:
+  <a href="https://developers.facebook.com/apps/" target="_blank">Apri Meta Developers</a>
+</p>
+
+<!-- Salvataggio MANUALE (se ti serve ancora) -->
+<form method="post" action="/settings/whatsapp">
+  <div style="margin:8px 0;">
+    <label>Access Token:</label><br>
+    <input type="password" name="wa_token" style="width:520px" required>
+  </div>
+
+  <div style="margin:8px 0;">
+    <label>Phone Number ID:</label><br>
+    <input type="text" name="wa_phone_number_id" placeholder="es. 1234567890" required>
+  </div>
+
+  <div style="margin:8px 0;">
+    <label>WABA ID (WhatsApp Business Account ID):</label><br>
+    <input type="text" name="wa_waba_id" placeholder="es. 1234567890" required>
+  </div>
+
+  <button type="submit">Salva collegamento</button>
+</form>
+
+<!-- Collegamento AUTOMATICO con Meta -->
+<div style="margin-top: 14px;">
+  <h3>Collega WhatsApp automaticamente</h3>
+  <button type="button" onclick="connectWhatsApp()">
+    Collega WhatsApp con Meta
+  </button>
+</div>
+
+<hr>
+
+<h3>Test enqueue (coda messaggi)</h3>
+<form method="post" action="/test/enqueue">
+
+  <div>
+    <label>Channel:</label>
+    <select name="channel">
+      <option value="whatsapp">whatsapp</option>
+      <option value="email">email</option>
+    </select>
+  </div>
+
+  <div>
+    <label>Contatto (contact_key):</label>
+    <input name="contact_key" placeholder="wa:+39333... oppure email" required>
+  </div>
+
+  <div>
+    <label>Testo:</label>
+    <input name="body" placeholder="Messaggio di test" required>
+  </div>
+
+  <div>
+    <label>Delay (minuti):</label>
+    <input type="number" name="delay_minutes" value="0" min="0">
+  </div>
+
+  <button type="submit">Metti in coda</button>
+</form>
+
+{% if rules %}
+ <ul>
+    {% for r in rules %}
+      <li>
+        Keyword: {{ r.keyword }} |
+        Delay: {{ r.delay_sec }}s |
+        Enabled: {{ r.enabled }}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>Nessuna regola configurata</p>
+{% endif %}
+
+<a href="/home">⬅ Torna alla Home</a>
+
+<!-- FB SDK + JS -->
+<div id="fb-root"></div>
+<script async defer crossorigin="anonymous"
+  src="https://connect.facebook.net/it_IT/sdk.js"></script>
+
+<script>
+window.fbAsyncInit = function() {
+  FB.init({
+    appId: "4190487331171937",
+    cookie: true,
+    xfbml: false,
+    version: "v18.0"
+  });
+};
+
+async function connectWhatsApp(){
+  FB.login(async function(response){
+
+    if (!response || !response.authResponse){
+      alert("Login annullato");
+      return;
+    }
+
+    const code = response.authResponse.code;
+
+    const r = await fetch("/settings/whatsapp/connect", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      credentials: "include",
+      body: JSON.stringify({ code: code })
+    });
+
+    const j = await r.json();
+    console.log("CONNECT RESULT:", j);
+
+    if (!j.ok){
+      alert("Errore: " + (j.error || "sconosciuto"));
+      return;
+    }
+
+    alert("WhatsApp collegato ✅");
+    // opzionale: ricarica pagina per mostrare dati aggiornati
+    // location.reload();
+  },{
+    config_id: "253626075800833360",
+    response_type: "code"
+  });
+}
+</script>
+
+{% endblock %}

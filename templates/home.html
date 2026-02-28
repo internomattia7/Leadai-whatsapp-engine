@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Home</h1>
+
+<p>Sei loggato come: <b>{{ user.email if user.email else user.get("email") }}</b></p>
+<p>Azienda ID: <code>{{ user.azienda_id if user.azienda_id else user.get("azienda_id") }}</code></p>
+
+<div style="margin-top:16px; display:flex; gap:10px; flex-wrap:wrap;">
+  <a class="btn" href="/preventivi">Preventivi</a>
+  <a class="btn" href="/lead">Lead</a>
+  <a class="btn" href="/entrate">Entrate</a>
+</div>
+
+<form method="post" action="/logout" style="margin-top:20px;">
+  <button class="btn-danger" type="submit">Logout</button>
+</form>
+
+{% endblock %}

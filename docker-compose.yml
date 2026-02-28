@@ -1,0 +1,17 @@
+services:
+  db:
+    image: postgres:16
+    container_name: leadai_db
+    environment:
+      POSTGRES_USER: leadai
+      POSTGRES_PASSWORD: leadai
+      POSTGRES_DB: leadai
+    ports:
+      - "5432:5432"
+    volumes:
+      - leadai_pgdata:/var/lib/postgresql/data
+
+volumes:
+  leadai_pgdata:
+
+

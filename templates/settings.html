@@ -1,0 +1,283 @@
+{% extends "base.html" %}
+
+{% block content %}
+<h1>Impostazioni</h1>
+
+<p>Azienda ID: {{ settings.azienda_id }}</p>
+
+<p>
+  Auto reply:
+  <strong>
+    {% if settings.auto_reply_enabled %}
+      ATTIVA
+    {% else %}
+      DISATTIVA
+    {% endif %}
+  </strong>
+</p>
+
+<h2>Impostazioni Auto Reply</h2>
+
+<form method="post" action="/settings">
+  <div style="margin: 8px 0;">
+    <label>
+      <input type="checkbox" name="auto_reply_enabled"
+             {% if settings.auto_reply_enabled %}checked{% endif %}>
+      Attiva auto reply
+    </label>
+  </div>
+
+  <div style="margin: 8px 0;">
+    <label>Inizio risposte (HH:MM):</label><br>
+    <input type="time" name="quiet_hours_start" value="{{ settings.quiet_hours_start }}">
+  </div>
+
+  <div style="margin: 8px 0;">
+    <label>Fine risposte (HH:MM):</label><br>
+    <input type="time" name="quiet_hours_end" value="{{ settings.quiet_hours_end }}">
+  </div>
+
+  <div style="margin: 8px 0;">
+    <label>Delay risposta (secondi):</label><br>
+    <input type="number" name="auto_reply_delay_sec" min="0" value="{{ settings.auto_reply_delay_sec }}">
+  </div>
+
+  <div style="margin: 8px 0;">
+    <label>Cooldown (secondi):</label><br>
+    <input type="number" name="cooldown_sec" min="0" value="{{ settings.cooldown_sec }}">
+  </div>
+
+  <button type="submit">Salva impostazioni</button>
+</form>
+
+<hr>
+
+<h2>Regole</h2>
+<hr>
+
+<h2>Collegamento WhatsApp Cloud API</h2>
+
+<p>
+  Apri Meta Developers per recuperare Token, Phone Number ID e WABA ID:
+  <a href="https://developers.facebook.com/apps/" target="_blank">Apri Meta Developers</a>
+</p>
+
+<!-- ✅ MANUALE -->
+<form method="post" action="/settings/whatsapp">
+  <div style="margin:8px 0;">
+    <label>Access Token:</label><br>
+    <input type="password" name="wa_token" style="width:520px" required>
+  </div>
+
+  <div style="margin:8px 0;">
+    <label>Phone Number ID:</label><br>
+    <input type="text" name="wa_phone_number_id" placeholder="es. 1234567890" required>
+  </div>
+
+  <div style="margin:8px 0;">
+    <label>WABA ID (WhatsApp Business Account ID):</label><br>
+    <input type="text" name="wa_waba_id" placeholder="es. 1234567890" required>
+  </div>
+
+  <button type="submit">Salva collegamento</button>
+</form>
+
+<!-- ✅ AUTOMATICO CON META -->
+<div style="margin-top: 18px; padding-top: 10px; border-top: 1px solid #ddd;">
+  <h3>Collega WhatsApp con Meta</h3>
+
+  <p style="opacity:.8; font-size:0.95em;">
+    Clicca per aprire il login Meta e collegare WhatsApp automaticamente.
+  </p>
+
+  <button id="btnConnectMeta" type="button" onclick="connectWhatsApp()">
+    Collega WhatsApp con Meta
+  </button>
+
+  <div id="waConnectStatus" style="margin-top:10px; font-size:0.95em; opacity:0.9;"></div>
+</div>
+
+<hr>
+
+<h3>Test enqueue (coda messaggi)</h3>
+<form method="post" action="/test/enqueue">
+  <div>
+    <label>Channel:</label>
+    <select name="channel">
+      <option value="whatsapp">whatsapp</option>
+      <option value="email">email</option>
+    </select>
+  </div>
+
+  <div>
+    <label>Contatto (contact_key):</label>
+    <input name="contact_key" placeholder="wa:+39333... oppure email" required>
+  </div>
+
+  <div>
+    <label>Testo:</label>
+    <input name="body" placeholder="Messaggio di test" required>
+  </div>
+
+  <div>
+    <label>Delay (minuti):</label>
+    <input type="number" name="delay_minutes" value="0" min="0">
+  </div>
+
+  <button type="submit">Metti in coda</button>
+</form>
+
+{% if rules %}
+  <ul>
+    {% for r in rules %}
+      <li>
+        Keyword: {{ r.keyword }} |
+        Delay: {{ r.delay_sec }}s |
+        Enabled: {{ r.enabled }}
+      </li>
+    {% endfor %}
+  </ul>
+{% else %}
+  <p>Nessuna regola configurata</p>
+{% endif %}
+
+<a href="/home">⬅ Torna alla Home</a>
+
+<!-- ======================
+     META SDK + JS ROBUSTO
+     ====================== -->
+
+<div id="fb-root"></div>
+
+<script>
+/**
+ * Caricamento SDK "robusto":
+ * - carica la SDK una sola volta
+ * - segnala quando FB è pronto
+ */
+(function loadFacebookSDK(){
+  if (window.__fbSdkLoading) return;
+  window.__fbSdkLoading = true;
+
+  const statusEl = document.getElementById("waConnectStatus");
+  if (statusEl) statusEl.textContent = "SDK Meta: caricamento...";
+
+  window.fbAsyncInit = function () {
+    console.log("✅ FB SDK caricato");
+    try {
+      FB.init({
+        appId: "4190487331171937",
+        cookie: true,
+        xfbml: false,
+        version: "v18.0"
+      });
+      window.__fbReady = true;
+      if (statusEl) statusEl.textContent = "SDK Meta: pronto ✅";
+    } catch (e) {
+      console.error("FB.init error:", e);
+      if (statusEl) statusEl.textContent = "Errore inizializzazione Meta SDK ❌";
+    }
+  };
+
+  const s = document.createElement("script");
+  s.src = "https://connect.facebook.net/it_IT/sdk.js";
+  s.async = true;
+  s.defer = true;
+  s.crossOrigin = "anonymous";
+  s.onerror = function(){
+    console.error("❌ Impossibile caricare SDK Meta");
+    if (statusEl) statusEl.textContent = "Impossibile caricare SDK Meta ❌";
+  };
+  document.head.appendChild(s);
+})();
+</script>
+
+<script>
+async function connectWhatsApp(){
+
+    const statusEl = document.getElementById("waConnectStatus");
+    const btn = document.getElementById("btnConnectMeta");
+
+    console.log("CLICK -> connectWhatsApp()");
+    if (statusEl) statusEl.textContent = "Apro login Meta...";
+    if (btn) btn.disabled = true;
+
+    try {
+
+        console.log("FB object:", FB);
+        console.log("window.__fbReady:", window.__fbReady);
+
+        if (!window.__fbReady || typeof FB === "undefined") {
+            console.error("FB non pronto / SDK non caricato");
+            if (statusEl) statusEl.textContent = "Meta SDK non pronto. Ricarica la pagina.";
+            if (btn) btn.disabled = false;
+            return;
+        }
+
+        FB.login(function (response) {
+
+            console.log("FB LOGIN:", response);
+
+            if (!response || !response.authResponse) {
+                alert("Login annullato");
+                if (btn) btn.disabled = false;
+                return;
+            }
+
+            const code = response.authResponse.code;
+
+            if (!code){
+                alert("Code mancante (controlla config_id / redirect)");
+                if (btn) btn.disabled = false;
+                return;
+            }
+
+            handleMetaCode(code);
+
+        }, {
+            config_id: "253626075800833360",
+            response_type: "code",
+            scope: "whatsapp_business_management,whatsapp_business_messaging"
+        });
+
+    } catch (err){
+        console.error("Errore connectWhatsApp:", err);
+        alert("Errore imprevisto ❌ (guarda Console)");
+        if (btn) btn.disabled = false;
+    }
+}
+
+
+async function handleMetaCode(code){
+
+    try {
+
+        const r = await fetch("/settings/whatsapp/connect", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ code: code })
+        });
+
+        const j = await r.json();
+        console.log("CONNECT RESULT:", j);
+
+        if (!j.ok){
+            alert("Errore: " + (j.error || "sconosciuto"));
+            return;
+        }
+
+        alert("WhatsApp collegato ✅");
+
+        // opzionale:
+        // location.reload();
+
+    } catch (err){
+        console.error("Errore handleMetaCode:", err);
+        alert("Errore imprevisto ❌ (guarda Console)");
+    }
+}
+
+ </script>
+
+{% endblock content %}

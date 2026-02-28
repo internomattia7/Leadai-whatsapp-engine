@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title or "Lead-AI" }}</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">Lead-AI Control</div>
+  <nav class="nav">
+    <a href="/home">Home</a>
+    <a href="/preventivi">Preventivi</a>
+    <a href="/lead">Lead</a>
+    <a href="/settings">Impostazioni</a>
+    <a href="/entrate">Entrate</a>
+  </nav>
+</div>
+
+<div class="container">
+  {% block content %}{% endblock %}
+</div>
+
+</body>
+</html>

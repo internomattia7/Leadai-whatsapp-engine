@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+
+<h1>Dashboard Principale</h1>
+<p>Seleziona area operativa:</p>
+
+<div class="cards">
+
+  <a class="card" href="/preventivi">
+    <h2>Preventivi</h2>
+    <p>Stato clienti, inviato, esito, fasi.</p>
+  </a>
+
+  <a class="card" href="/lead">
+    <h2>Lead</h2>
+    <p>Tutti i contatti entrati da WhatsApp, Email, Web.</p>
+  </a>
+
+  <a class="card" href="/entrate">
+    <h2>Entrate</h2>
+    <p>Preventivi accettati e incassi.</p>
+  </a>
+
+</div>
+
+{% endblock %}
