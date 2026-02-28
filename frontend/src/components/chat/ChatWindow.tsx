@@ -36,6 +36,29 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
     setOptimisticMsgs([])
   }, [chat?.contact_key])
 
+  // When server messages update, remove any optimistic message that is now
+  // covered by a real server message (matched by body + direction + time window).
+  // This prevents the message from ever disappearing during a refresh race condition:
+  // the optimistic stays visible until the server actually confirms it.
+  useEffect(() => {
+    setOptimisticMsgs(prev => {
+      if (prev.length === 0) return prev
+      return prev.filter(opt => {
+        // Always keep error messages visible so user sees the failure
+        if (opt.status === 'error') return true
+        const optTime = new Date(opt.ts || 0).getTime()
+        // Remove only if a matching real message appeared in server data
+        const matched = messages.some(
+          m =>
+            m.direction === 'out' &&
+            m.body === opt.body &&
+            Math.abs(new Date(m.ts || 0).getTime() - optTime) < 30_000
+        )
+        return !matched
+      })
+    })
+  }, [messages]) // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!chat) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-3 text-muted">
@@ -55,16 +78,19 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
       status: 'pending',
     }
 
-    // A) Optimistic: show bubble immediately
+    // Show bubble immediately
     setOptimisticMsgs(prev => [...prev, tempMsg])
 
     try {
       await sendMessage(chat.contact_key, text)
-      // B+C) Fetch real messages from server, then drop the optimistic bubble
-      await refresh()
-      setOptimisticMsgs(prev => prev.filter(m => m.id !== tempId))
+      // Update to 'sent' while waiting for server to confirm via polling/refresh
+      setOptimisticMsgs(prev =>
+        prev.map(m => m.id === tempId ? { ...m, status: 'sent' } : m)
+      )
+      // Trigger a background refresh — when it returns, the useEffect above
+      // will automatically remove the optimistic message once matched
+      refresh()
     } catch {
-      // Mark the bubble as error so user knows it failed
       setOptimisticMsgs(prev =>
         prev.map(m => m.id === tempId ? { ...m, status: 'error' } : m)
       )
@@ -98,7 +124,7 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
           )}
         </div>
 
-        {/* FIX #1 — Call button */}
+        {/* Call button */}
         {chat.telefono && (
           <a
             href={`tel:${chat.telefono}`}
