@@ -8,6 +8,7 @@ from psycopg2.extras import RealDictCursor
 import uvicorn
 
 from fastapi import FastAPI, Depends, HTTPException, Request, Form
+from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv 
 load_dotenv()
@@ -116,16 +117,33 @@ def get_current_user(request: Request) -> dict:
 
 # ====== NORMALIZE HELPERS ======
 def normalize_contact_key(channel: str, raw: str) -> str:
+    """
+    Canonical format: wa:{digits}  — no + after wa:
+    Examples:
+      "393290927001"    -> "wa:393290927001"
+      "+393290927001"   -> "wa:393290927001"
+      "wa:393290927001" -> "wa:393290927001"
+      "wa:+393290927001"-> "wa:393290927001"
+    """
     raw = (raw or "").strip()
-
     if channel == "whatsapp":
-        if raw.startswith("wa:"):
-            return raw
-        if raw.startswith("+"):
-            return f"wa:{raw}"
-        return f"wa:+{raw}"
-
+        # strip existing wa: prefix (with or without +)
+        for prefix in ("wa:+", "wa:"):
+            if raw.startswith(prefix):
+                raw = raw[len(prefix):]
+                break
+        # strip any remaining leading +
+        raw = raw.lstrip("+")
+        return f"wa:{raw}"
     return raw
+
+
+def phone_from_key(contact_key: str) -> str:
+    """Extract raw digits from a contact_key (e.g. 'wa:393290927001' -> '393290927001')."""
+    for prefix in ("wa:+", "wa:"):
+        if contact_key.startswith(prefix):
+            return contact_key[len(prefix):].lstrip("+")
+    return contact_key.lstrip("+")
 
 
 def normalize_text(s: str) -> str:
@@ -195,6 +213,14 @@ def send_whatsapp_message(
 
 # ====== APP ======
 app = FastAPI(title="LeadAI")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 BASE_DIR = Path(__file__).resolve().parent
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
@@ -299,7 +325,7 @@ async def wa_events(request: Request):
         print("ERRORE PARSING WEBHOOK:", e)
         return {"ok": True}
 
-    contact_key = f"wa:{from_wa}"
+    contact_key = normalize_contact_key("whatsapp", from_wa)
 
     conn = get_conn()
     try:
@@ -1827,6 +1853,350 @@ def test_enqueue(
 @app.get("/entrate", response_class=HTMLResponse)
 def entrate(request: Request):
     return templates.TemplateResponse("entrate.html", {"request": request})
+
+# =====================
+# VENOMAPP /api/ ENDPOINTS
+# =====================
+
+class LoginJsonIn(BaseModel):
+    email: str
+    password: str
+
+class SendMessageIn(BaseModel):
+    text: str
+
+class NewChatIn(BaseModel):
+    phone: str
+    nome: Optional[str] = None
+
+class CompanySettingsIn(BaseModel):
+    business_phone: Optional[str] = None
+
+
+@app.post("/api/auth/login")
+def api_login(body: LoginJsonIn):
+    email = (body.email or "").lower().strip()
+    password = body.password or ""
+    if not email or not password:
+        raise HTTPException(status_code=422, detail="Missing credentials")
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            row = get_user_by_email(cur, email)
+            if not row:
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+            user_id, azienda_id, email_db, password_hash, role = row
+            if not pwd_context.verify(password, password_hash):
+                raise HTTPException(status_code=401, detail="Invalid credentials")
+            cur.execute("SELECT nome FROM aziende WHERE id = %s LIMIT 1", (azienda_id,))
+            az = cur.fetchone()
+            azienda_nome = az[0] if az else ""
+            token = create_access_token({
+                "sub": str(user_id),
+                "azienda_id": str(azienda_id),
+                "email": email_db,
+                "role": role,
+            })
+    finally:
+        conn.close()
+
+    resp = JSONResponse({
+        "ok": True,
+        "user": {
+            "email": email_db,
+            "azienda_id": str(azienda_id),
+            "role": role,
+            "azienda_nome": azienda_nome,
+        }
+    })
+    resp.set_cookie(
+        key="access_token",
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=False,
+        max_age=60 * 60 * 24 * 7,
+    )
+    return resp
+
+
+@app.post("/api/auth/logout")
+def api_logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("access_token")
+    return resp
+
+
+@app.get("/api/me")
+def api_me(user=Depends(get_current_user)):
+    azienda_id = user["azienda_id"]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT nome FROM aziende WHERE id = %s LIMIT 1", (azienda_id,))
+            az = cur.fetchone()
+            azienda_nome = az[0] if az else ""
+            cur.execute(
+                "SELECT business_phone FROM company_settings WHERE azienda_id = %s LIMIT 1",
+                (azienda_id,),
+            )
+            cs = cur.fetchone()
+            business_phone = cs[0] if cs else None
+    finally:
+        conn.close()
+    return {
+        "user_id": user.get("sub"),
+        "email": user.get("email"),
+        "role": user.get("role"),
+        "azienda_id": azienda_id,
+        "azienda_nome": azienda_nome,
+        "business_phone": business_phone,
+    }
+
+
+@app.get("/api/chats")
+def api_chats(user=Depends(get_current_user)):
+    azienda_id = user["azienda_id"]
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT
+                    c.id,
+                    c.contact_key,
+                    c.nome_cliente,
+                    c.telefono,
+                    s.fase_preventivo,
+                    s.esito_cliente,
+                    s.updated_at AS status_updated_at,
+                    GREATEST(
+                        (SELECT created_at FROM wa_inbound_messages
+                         WHERE from_wa = LTRIM(c.contact_key, 'wa:+')
+                         ORDER BY created_at DESC LIMIT 1),
+                        (SELECT send_after FROM outbound_messages
+                         WHERE contact_key = c.contact_key
+                         ORDER BY id DESC LIMIT 1)
+                    ) AS last_at,
+                    COALESCE(
+                        (SELECT text FROM wa_inbound_messages
+                         WHERE from_wa = LTRIM(c.contact_key, 'wa:+')
+                         ORDER BY created_at DESC LIMIT 1),
+                        (SELECT body FROM outbound_messages
+                         WHERE contact_key = c.contact_key
+                         ORDER BY id DESC LIMIT 1)
+                    ) AS last_message,
+                    (SELECT COUNT(*) FROM wa_inbound_messages
+                     WHERE from_wa = LTRIM(c.contact_key, 'wa:+')
+                       AND read_at IS NULL) AS unread_count
+                FROM lead_contacts c
+                LEFT JOIN lead_status s
+                    ON s.contact_key = c.contact_key
+                   AND s.azienda_id = c.azienda_id
+                WHERE c.azienda_id = %s
+                ORDER BY last_at DESC NULLS LAST
+                LIMIT 100
+                """,
+                (azienda_id,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+@app.get("/api/chats/{contact_key:path}/messages")
+def api_messages(contact_key: str, user=Depends(get_current_user)):
+    azienda_id = user["azienda_id"]
+    # Normalize to canonical wa:DIGITS — handles wa:+, wa:, +, or bare digits
+    canonical_key = normalize_contact_key("whatsapp", contact_key)
+    phone = phone_from_key(canonical_key)  # raw digits, no prefix
+
+    print(f"[DEBUG api_messages] raw_key={repr(contact_key)} canonical={repr(canonical_key)} phone={repr(phone)} azienda_id={azienda_id}", flush=True)
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            # Also match wa:+ variant stored in old outbound rows
+            canonical_plus = f"wa:+{phone}"
+
+            cur.execute(
+                """
+                SELECT 'in' AS direction,
+                       msg_id AS id,
+                       text AS body,
+                       created_at AS ts,
+                       CASE WHEN read_at IS NULL THEN 'unread' ELSE 'read' END AS status
+                FROM wa_inbound_messages
+                WHERE from_wa = %s
+                UNION ALL
+                SELECT 'out' AS direction,
+                       id::text AS id,
+                       body,
+                       COALESCE(sent_at, send_after) AS ts,
+                       status
+                FROM outbound_messages
+                WHERE azienda_id = %s
+                  AND contact_key IN (%s, %s)
+                ORDER BY ts ASC NULLS LAST
+                LIMIT 200
+                """,
+                (phone, azienda_id, canonical_key, canonical_plus),
+            )
+            rows = cur.fetchall()
+
+    finally:
+        conn.close()
+
+    print(f"[DEBUG api_messages] returned {len(rows)} rows for phone={repr(phone)}", flush=True)
+    return [
+        {"direction": r[0], "id": r[1], "body": r[2],
+         "ts": r[3].isoformat() if r[3] else None, "status": r[4]}
+        for r in rows
+    ]
+
+
+@app.post("/api/chats/{contact_key:path}/send")
+def api_send(contact_key: str, body: SendMessageIn, user=Depends(get_current_user)):
+    azienda_id = user["azienda_id"]
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Empty message")
+    canonical_key = normalize_contact_key("whatsapp", contact_key)
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO outbound_messages
+                    (azienda_id, channel, contact_key, body, status, send_after)
+                VALUES (%s, 'whatsapp', %s, %s, 'queued', NOW())
+                RETURNING id
+                """,
+                (azienda_id, canonical_key, text),
+            )
+            msg_id = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "id": msg_id}
+
+
+@app.post("/api/chats/new")
+def api_new_chat(body: NewChatIn, user=Depends(get_current_user)):
+    azienda_id = user["azienda_id"]
+    phone = (body.phone or "").strip()
+    if not phone:
+        raise HTTPException(status_code=422, detail="Phone required")
+
+    contact_key = normalize_contact_key("whatsapp", phone)
+    nome = body.nome or phone
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO lead_contacts (azienda_id, contact_key, telefono, nome_cliente)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (contact_key) DO UPDATE
+                    SET telefono = EXCLUDED.telefono,
+                        updated_at = now()
+                RETURNING id
+                """,
+                (azienda_id, contact_key, phone, nome),
+            )
+            contact_id = cur.fetchone()[0]
+            cur.execute(
+                """
+                INSERT INTO lead_status (azienda_id, contact_key, fase_preventivo, last_channel, updated_at)
+                VALUES (%s, %s, 'nuovo', 'whatsapp', now())
+                ON CONFLICT (contact_key) DO NOTHING
+                """,
+                (azienda_id, contact_key),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "contact_key": contact_key, "id": contact_id}
+
+
+@app.post("/api/chats/{contact_key:path}/mark_read")
+def api_mark_read(contact_key: str, user=Depends(get_current_user)):
+    phone = phone_from_key(normalize_contact_key("whatsapp", contact_key))
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE wa_inbound_messages
+                SET read_at = NOW()
+                WHERE from_wa = %s AND read_at IS NULL
+                """,
+                (phone,),
+            )
+            updated = cur.rowcount
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True, "marked": updated}
+
+
+@app.get("/api/settings/company")
+def api_get_company_settings(user=Depends(get_current_user)):
+    azienda_id = user["azienda_id"]
+    conn = get_conn()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(
+                """
+                SELECT azienda_id, timezone, quiet_hours_start, quiet_hours_end,
+                       auto_reply_enabled, auto_reply_delay_sec, cooldown_sec, business_phone
+                FROM company_settings
+                WHERE azienda_id = %s
+                LIMIT 1
+                """,
+                (azienda_id,),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return {"azienda_id": azienda_id, "business_phone": None}
+    return dict(row)
+
+
+@app.post("/api/settings/company")
+def api_save_company_settings(body: CompanySettingsIn, user=Depends(get_current_user)):
+    azienda_id = user["azienda_id"]
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO company_settings (azienda_id, business_phone)
+                VALUES (%s, %s)
+                ON CONFLICT (azienda_id) DO UPDATE
+                    SET business_phone = EXCLUDED.business_phone,
+                        updated_at = now()
+                """,
+                (azienda_id, body.business_phone),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# =====================
+# VENOMAPP STATIC (prod)
+# =====================
+
+FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
+if FRONTEND_DIST.exists():
+    app.mount("/app", StaticFiles(directory=str(FRONTEND_DIST), html=True), name="venomapp")
 
 # =====================
 # AVVIO
