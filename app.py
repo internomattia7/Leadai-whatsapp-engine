@@ -2067,18 +2067,37 @@ def api_chats(user=Depends(get_current_user)):
 
 @app.get("/api/chats/{contact_key:path}/messages")
 def api_messages(contact_key: str, user=Depends(get_current_user)):
-    azienda_id = user["azienda_id"]
-    # Normalize to canonical wa:DIGITS — handles wa:+, wa:, +, or bare digits
+    user_azienda_id = user["azienda_id"]
     canonical_key = normalize_contact_key("whatsapp", contact_key)
-    phone = phone_from_key(canonical_key)  # raw digits, no prefix
-
-    print(f"[DEBUG api_messages] raw_key={repr(contact_key)} canonical={repr(canonical_key)} phone={repr(phone)} azienda_id={azienda_id}", flush=True)
+    phone = phone_from_key(canonical_key)
+    canonical_plus = f"wa:+{phone}"
 
     conn = get_conn()
     try:
         with conn.cursor() as cur:
-            # Also match wa:+ variant stored in old outbound rows
-            canonical_plus = f"wa:+{phone}"
+            # Same smart lookup as api_send: find the azienda that owns WA credentials
+            # for this contact. outbound_messages are stored under that azienda_id,
+            # which may differ from the logged-in user's azienda_id.
+            cur.execute(
+                """
+                SELECT ci.azienda_id
+                FROM wa_inbound_messages wim
+                JOIN company_integrations ci
+                    ON ci.wa_phone_number_id = wim.phone_number_id
+                   AND ci.channel = 'whatsapp'
+                   AND ci.is_enabled = TRUE
+                WHERE wim.from_wa = %s
+                ORDER BY wim.created_at DESC
+                LIMIT 1
+                """,
+                (phone,),
+            )
+            row = cur.fetchone()
+            send_azienda_id = row[0] if row else user_azienda_id
+
+            # Use both azienda IDs so outbound messages are always found,
+            # even when the WA-credentials company ≠ logged-in user's company.
+            azienda_ids = tuple({user_azienda_id, send_azienda_id})
 
             cur.execute(
                 """
@@ -2096,19 +2115,19 @@ def api_messages(contact_key: str, user=Depends(get_current_user)):
                        COALESCE(sent_at, send_after) AS ts,
                        status
                 FROM outbound_messages
-                WHERE azienda_id = %s
-                  AND contact_key IN (%s, %s)
+                WHERE contact_key IN (%s, %s)
+                  AND azienda_id IN %s
                 ORDER BY ts ASC NULLS LAST
                 LIMIT 200
                 """,
-                (phone, azienda_id, canonical_key, canonical_plus),
+                (phone, canonical_key, canonical_plus, azienda_ids),
             )
             rows = cur.fetchall()
 
     finally:
         conn.close()
 
-    print(f"[DEBUG api_messages] returned {len(rows)} rows for phone={repr(phone)}", flush=True)
+    print(f"[DEBUG api_messages] phone={repr(phone)} send_az={send_azienda_id} rows={len(rows)}", flush=True)
     return [
         {"direction": r[0], "id": r[1], "body": r[2],
          "ts": r[3].isoformat() if r[3] else None, "status": r[4]}
