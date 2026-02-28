@@ -11,9 +11,9 @@ function formatTs(ts: string | null) {
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === 'sent') return <Check size={12} className="text-cyan" />
-  if (status === 'queued') return <Clock size={12} className="text-muted" />
-  if (status === 'error') return <AlertCircle size={12} className="text-red-400" />
+  if (status === 'sent' || status === 'read') return <Check size={12} className="text-cyan" />
+  if (status === 'queued' || status === 'pending') return <Clock size={12} className="text-muted opacity-60" />
+  if (status === 'error' || status === 'failed') return <AlertCircle size={12} className="text-red-400" />
   return null
 }
 

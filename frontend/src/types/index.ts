@@ -21,7 +21,7 @@ export interface Chat {
 }
 
 export interface Message {
-  id: number
+  id: number | string
   direction: 'in' | 'out'
   body: string
   ts: string | null
