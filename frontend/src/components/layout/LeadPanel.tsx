@@ -3,6 +3,7 @@ import { Phone, Hash, Tag, User as UserIcon, Pencil, Check, X } from 'lucide-rea
 import type { ReactNode } from 'react'
 import type { Chat, User as UserType } from '../../types'
 import { updateContactName } from '../../api/chats'
+import Avatar from '../ui/Avatar'
 
 interface LeadPanelProps {
   chat: Chat | null
@@ -70,9 +71,11 @@ export default function LeadPanel({ chat, currentUser, onContactUpdated }: LeadP
 
       {/* Avatar + editable name */}
       <div className="flex flex-col items-center gap-2 py-3">
-        <div className="w-14 h-14 rounded-full bg-gradient-to-br from-violet to-cyan flex items-center justify-center text-2xl font-bold text-white">
-          {displayName[0].toUpperCase()}
-        </div>
+        <Avatar
+          name={displayName}
+          imageUrl={chat.profile_image_url}
+          size="lg"
+        />
 
         {editingName ? (
           <div className="flex items-center gap-1 w-full px-2">

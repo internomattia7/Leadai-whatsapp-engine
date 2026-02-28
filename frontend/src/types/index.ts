@@ -12,6 +12,7 @@ export interface Chat {
   contact_key: string
   nome_cliente: string | null
   telefono: string | null
+  profile_image_url: string | null
   fase_preventivo: string | null
   esito_cliente: string | null
   last_at: string | null

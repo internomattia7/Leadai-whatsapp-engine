@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { MessageSquare, ArrowLeft } from 'lucide-react'
 import MessageBubble from './MessageBubble'
 import MessageInput from './MessageInput'
+import Avatar from '../ui/Avatar'
 import { useMessages } from '../../hooks/useMessages'
 import type { Chat } from '../../types'
 import { sendMessage, markRead } from '../../api/chats'
@@ -58,9 +59,11 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
             <ArrowLeft size={20} />
           </button>
         )}
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet to-cyan flex-shrink-0 flex items-center justify-center text-sm font-bold text-white">
-          {(chat.nome_cliente || chat.telefono || '?')[0].toUpperCase()}
-        </div>
+        <Avatar
+          name={chat.nome_cliente || chat.telefono || '?'}
+          imageUrl={chat.profile_image_url}
+          size="md"
+        />
         <div className="min-w-0">
           <div className="text-sm font-semibold truncate">
             {chat.nome_cliente || chat.telefono || chat.contact_key}

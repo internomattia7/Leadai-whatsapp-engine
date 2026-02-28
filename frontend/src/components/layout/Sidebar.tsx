@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Search, MessageSquare } from 'lucide-react'
 import type { Chat } from '../../types'
+import Avatar from '../ui/Avatar'
 
 type Tab = 'all' | 'new' | 'follow' | 'closed'
 
@@ -105,9 +106,11 @@ export default function Sidebar({ chats, selectedKey, onSelect }: SidebarProps) 
             }`}
           >
             {/* Avatar */}
-            <div className="w-9 h-9 rounded-full bg-gradient-to-br from-violet to-cyan flex-shrink-0 flex items-center justify-center text-sm font-bold text-white">
-              {(chat.nome_cliente || chat.telefono || '?')[0].toUpperCase()}
-            </div>
+            <Avatar
+              name={chat.nome_cliente || chat.telefono || '?'}
+              imageUrl={chat.profile_image_url}
+              size="sm"
+            />
             {/* Info */}
             <div className="flex-1 min-w-0">
               <div className="flex items-center justify-between gap-1">

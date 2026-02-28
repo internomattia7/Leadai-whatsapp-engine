@@ -1,5 +1,6 @@
 import re
 import json
+import threading
 from datetime import datetime, timedelta, time
 from pathlib import Path
 
@@ -186,6 +187,53 @@ def _graph_get(path: str, token: str, params: dict | None = None) -> Tuple[int, 
     except Exception:
         j = None
     return r.status_code, r.text, j
+
+
+def fetch_wa_profile_pic(wa_token: str, wa_phone_number_id: str, from_wa: str) -> str | None:
+    """Best-effort: call Meta Contacts API to get the WhatsApp profile picture URL."""
+    try:
+        url = f"https://graph.facebook.com/{GRAPH_VERSION}/{wa_phone_number_id}/contacts"
+        resp = requests.get(
+            url,
+            params={"contacts": json.dumps([from_wa])},
+            headers={"Authorization": f"Bearer {wa_token}"},
+            timeout=5,
+        )
+        if resp.status_code != 200:
+            print(f"[profile_pic] API {resp.status_code}: {resp.text[:200]}", flush=True)
+            return None
+        contacts = (resp.json().get("contacts") or [])
+        if not contacts:
+            return None
+        return (contacts[0].get("profile") or {}).get("profile_pic_url") or None
+    except Exception as e:
+        print(f"[profile_pic] fetch error: {e}", flush=True)
+        return None
+
+
+def _save_profile_pic_bg(wa_token: str, wa_phone_number_id: str, from_wa: str, contact_key: str):
+    """Background thread: fetch profile pic and persist it in lead_contacts."""
+    pic_url = fetch_wa_profile_pic(wa_token, wa_phone_number_id, from_wa)
+    if not pic_url:
+        return
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE lead_contacts
+                    SET profile_image_url = %s, updated_at = now()
+                    WHERE contact_key = %s
+                    """,
+                    (pic_url, contact_key),
+                )
+            conn.commit()
+            print(f"[profile_pic] saved for {contact_key}", flush=True)
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[profile_pic] db save error: {e}", flush=True)
 
 
 def send_whatsapp_message(
@@ -395,7 +443,14 @@ async def wa_events(request: Request):
 
         conn.commit()
 
-        # 6) genera reply ([TEST] nel testo → strip prima di passare all'engine)
+        # 6) best-effort: fetch profile pic in background (non blocca il flusso)
+        threading.Thread(
+            target=_save_profile_pic_bg,
+            args=(wa_token, wa_phone_number_id, from_wa, contact_key),
+            daemon=True,
+        ).start()
+
+        # 7) genera reply ([TEST] nel testo → strip prima di passare all'engine)
         is_test = "[TEST]" in (text or "")
         clean_text = text.replace("[TEST]", "").strip() if is_test else text
         if is_test:
@@ -404,7 +459,7 @@ async def wa_events(request: Request):
         reply = process_text_message(conn, contact_key, clean_text)
         print("RISPOSTA AI:", reply)
 
-        # 7) invia reply
+        # 8) invia reply
         if reply:
             send_whatsapp_message(from_wa, reply, wa_token, wa_phone_number_id, graph_version=GRAPH_VERSION)
 
@@ -1971,6 +2026,7 @@ def api_chats(user=Depends(get_current_user)):
                     c.contact_key,
                     c.nome_cliente,
                     c.telefono,
+                    c.profile_image_url,
                     s.fase_preventivo,
                     s.esito_cliente,
                     s.updated_at AS status_updated_at,
