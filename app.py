@@ -189,6 +189,64 @@ def _graph_get(path: str, token: str, params: dict | None = None) -> Tuple[int, 
     return r.status_code, r.text, j
 
 
+def _handle_wa_statuses(statuses: list):
+    """
+    Process WhatsApp delivery/read/failed receipts from the webhook statuses[] array.
+    Matches by wa_message_id (wamid) and updates outbound_messages.status.
+    Status priority: queued < sent < delivered < read (never downgrade).
+    """
+    STATUS_PRIORITY = {"queued": 0, "sent": 1, "delivered": 2, "read": 3, "error": -1}
+    try:
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                for s in statuses:
+                    wamid = s.get("id")
+                    wa_status = s.get("status")  # 'sent', 'delivered', 'read', 'failed'
+                    if not wamid or not wa_status:
+                        continue
+
+                    if wa_status == "delivered":
+                        # Upgrade to delivered only if currently sent
+                        cur.execute(
+                            """
+                            UPDATE outbound_messages
+                            SET status = 'delivered'
+                            WHERE wa_message_id = %s AND status = 'sent'
+                            """,
+                            (wamid,),
+                        )
+                    elif wa_status == "read":
+                        # Upgrade to read from sent or delivered
+                        cur.execute(
+                            """
+                            UPDATE outbound_messages
+                            SET status = 'read'
+                            WHERE wa_message_id = %s AND status IN ('sent', 'delivered')
+                            """,
+                            (wamid,),
+                        )
+                    elif wa_status == "failed":
+                        errors = s.get("errors") or []
+                        reason = errors[0].get("message", "failed") if errors else "failed"
+                        cur.execute(
+                            """
+                            UPDATE outbound_messages
+                            SET status = 'error', error = %s
+                            WHERE wa_message_id = %s AND status NOT IN ('delivered', 'read')
+                            """,
+                            (reason, wamid),
+                        )
+
+                    print(f"[WA STATUS] wamid={wamid} → {wa_status}", flush=True)
+
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[WA STATUS ERROR] {e}", flush=True)
+
+
 def fetch_wa_profile_pic(wa_token: str, wa_phone_number_id: str, from_wa: str) -> str | None:
     """Best-effort: call Meta Contacts API to get the WhatsApp profile picture URL."""
     try:
@@ -353,6 +411,12 @@ async def wa_events(request: Request):
         value = changes0.get("value") or {}
 
         phone_number_id = (value.get("metadata") or {}).get("phone_number_id")
+
+        # Handle delivery/read/failed receipts (statuses[] payload)
+        statuses = value.get("statuses") or []
+        if statuses:
+            _handle_wa_statuses(statuses)
+
         messages = value.get("messages") or []
         if not phone_number_id or not messages:
             return {"ok": True}

@@ -38,20 +38,19 @@ def _get_wa_credentials(conn, azienda_id: int):
     return wa_token, wa_phone_number_id
 
 
-def send_message(conn, azienda_id: int, channel: str, contact_key: str, body: str):
+def send_message(conn, azienda_id: int, channel: str, contact_key: str, body: str) -> str | None:
     """
-    Invia un messaggio sul canale specificato usando le credenziali dell'azienda.
-
-    Per WhatsApp:
-      - recupera wa_access_token e wa_phone_number_id da company_integrations
-      - estrae il numero destinatario dal contact_key (formato "wa:+39333...")
-      - chiama la Graph API tramite whatsapp_client
+    Invia un messaggio sul canale specificato.
+    Restituisce il wamid (wa_message_id) ricevuto da Meta, o None se non disponibile.
     """
     if channel == "whatsapp":
         wa_token, wa_phone_number_id = _get_wa_credentials(conn, azienda_id)
-        # contact_key è sempre nel formato "wa:+39333..."
         to = contact_key.removeprefix("wa:")
-        send_whatsapp_message(to, body, wa_token, wa_phone_number_id)
+        resp = send_whatsapp_message(to, body, wa_token, wa_phone_number_id)
+        try:
+            return resp.json()["messages"][0]["id"]
+        except Exception:
+            return None
     else:
         raise NotImplementedError(f"Channel '{channel}' non supportato dal worker")
 
@@ -80,20 +79,21 @@ def main():
 
                 for msg_id, azienda_id, channel, contact_key, body in rows:
                     try:
-                        send_message(conn, azienda_id, channel, contact_key, body)
+                        wamid = send_message(conn, azienda_id, channel, contact_key, body)
 
                         cur.execute(
                             """
                             UPDATE outbound_messages
                             SET status = 'sent',
                                 sent_at = NOW(),
+                                wa_message_id = %s,
                                 error = NULL
                             WHERE id = %s
                             """,
-                            (msg_id,),
+                            (wamid, msg_id),
                         )
                         print(
-                            f"[SENT] id={msg_id} channel={channel} to={contact_key}",
+                            f"[SENT] id={msg_id} channel={channel} to={contact_key} wamid={wamid}",
                             flush=True,
                         )
 

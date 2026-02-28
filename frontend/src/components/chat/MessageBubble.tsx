@@ -1,4 +1,4 @@
-import { Check, Clock, AlertCircle } from 'lucide-react'
+import { Check, CheckCheck, Clock } from 'lucide-react'
 import type { Message } from '../../types'
 
 interface MessageBubbleProps {
@@ -11,9 +11,22 @@ function formatTs(ts: string | null) {
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === 'sent' || status === 'read') return <Check size={12} className="text-cyan" />
-  if (status === 'queued' || status === 'pending') return <Clock size={12} className="text-muted opacity-60" />
-  if (status === 'error' || status === 'failed') return <AlertCircle size={12} className="text-red-400" />
+  // ⏳ pending/queued/sent → waiting for delivery receipt
+  if (status === 'pending' || status === 'queued' || status === 'sent') {
+    return <Clock size={12} className="text-white/50" />
+  }
+  // ✓✓ green → read
+  if (status === 'read') {
+    return <CheckCheck size={12} className="text-green-400" />
+  }
+  // ✓✓ gray → delivered
+  if (status === 'delivered') {
+    return <CheckCheck size={12} className="text-white/60" />
+  }
+  // ✓ red → error (not sent)
+  if (status === 'error' || status === 'failed') {
+    return <Check size={12} className="text-red-400" />
+  }
   return null
 }
 
