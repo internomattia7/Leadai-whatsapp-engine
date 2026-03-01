@@ -41,8 +41,7 @@ export async function sendMedia(
   const fd = new FormData()
   fd.append('file', file)
   if (caption) fd.append('caption', caption)
-  const res = await client.post(`/chats/${encodeURIComponent(contactKey)}/send-media`, fd, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-  })
+  // Do NOT set Content-Type manually: axios+browser must auto-set multipart/form-data WITH boundary
+  const res = await client.post(`/chats/${encodeURIComponent(contactKey)}/send-media`, fd)
   return res.data
 }

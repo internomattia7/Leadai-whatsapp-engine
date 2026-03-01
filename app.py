@@ -2458,7 +2458,10 @@ async def api_send_media(
                 wa_token, wa_phone_number_id = cred_row
 
         # Upload to Meta (outside cursor context, can be slow)
+        print(f"[SEND-MEDIA] uploading fname={fname!r} mime={mime!r} size={len(file_bytes)}B "
+              f"phone_id={wa_phone_number_id}", flush=True)
         media_id = _wa_upload_media(file_bytes, mime, fname, wa_token, wa_phone_number_id, GRAPH_VERSION)
+        print(f"[SEND-MEDIA] Meta upload OK → media_id={media_id!r}", flush=True)
 
         with conn.cursor() as cur:
             cur.execute(

@@ -102,10 +102,39 @@ def main():
 
                 for msg_id, azienda_id, channel, contact_key, body, \
                         msg_type, media_id, mime_type, filename, caption in rows:
+                    effective_type = msg_type or "text"
+
+                    # ── Detailed pre-send log ──────────────────────────────
+                    if effective_type == "text":
+                        print(
+                            f"[WORKER] id={msg_id} → TEXT  body={repr(body[:60])}",
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            f"[WORKER] id={msg_id} → MEDIA type={effective_type} "
+                            f"media_id={media_id!r} mime={mime_type!r} "
+                            f"filename={filename!r} caption={caption!r}",
+                            flush=True,
+                        )
+                    # ── Guard: media row with missing media_id is unrecoverable ──
+                    if effective_type != "text" and not media_id:
+                        err = f"msg_type={effective_type!r} but media_id is NULL — cannot send"
+                        print(f"[ERROR] id={msg_id} {err}", flush=True)
+                        cur.execute(
+                            """
+                            UPDATE outbound_messages
+                            SET status = 'error', error = %s
+                            WHERE id = %s
+                            """,
+                            (err, msg_id),
+                        )
+                        continue
+
                     try:
                         wamid = send_message(
                             conn, azienda_id, channel, contact_key, body,
-                            msg_type=msg_type or "text",
+                            msg_type=effective_type,
                             media_id=media_id,
                             mime_type=mime_type,
                             filename=filename,
@@ -124,13 +153,15 @@ def main():
                             (wamid, msg_id),
                         )
                         print(
-                            f"[SENT] id={msg_id} channel={channel} to={contact_key} wamid={wamid}",
+                            f"[SENT] id={msg_id} type={effective_type} "
+                            f"channel={channel} to={contact_key} wamid={wamid}",
                             flush=True,
                         )
 
                     except Exception as e:
                         print(
-                            f"[ERROR] id={msg_id} channel={channel} to={contact_key}: {e}",
+                            f"[ERROR] id={msg_id} type={effective_type} "
+                            f"channel={channel} to={contact_key}: {e}",
                             flush=True,
                         )
                         cur.execute(
