@@ -192,10 +192,9 @@ def _graph_get(path: str, token: str, params: dict | None = None) -> Tuple[int, 
 def _handle_wa_statuses(statuses: list):
     """
     Process WhatsApp delivery/read/failed receipts from the webhook statuses[] array.
-    Matches by wa_message_id (wamid) and updates outbound_messages.status.
-    Status priority: queued < sent < delivered < read (never downgrade).
+    Matches by wa_message_id (wamid) — never downgrades status.
+    Priority: queued < sent < delivered < read (error is terminal).
     """
-    STATUS_PRIORITY = {"queued": 0, "sent": 1, "delivered": 2, "read": 3, "error": -1}
     try:
         conn = get_conn()
         try:
@@ -207,25 +206,29 @@ def _handle_wa_statuses(statuses: list):
                         continue
 
                     if wa_status == "delivered":
-                        # Upgrade to delivered only if currently sent
+                        # Accept delivered from any non-terminal state
                         cur.execute(
                             """
                             UPDATE outbound_messages
                             SET status = 'delivered'
-                            WHERE wa_message_id = %s AND status = 'sent'
+                            WHERE wa_message_id = %s
+                              AND status NOT IN ('delivered', 'read', 'error')
                             """,
                             (wamid,),
                         )
+                        updated = cur.rowcount
                     elif wa_status == "read":
-                        # Upgrade to read from sent or delivered
+                        # read is always the final positive state
                         cur.execute(
                             """
                             UPDATE outbound_messages
                             SET status = 'read'
-                            WHERE wa_message_id = %s AND status IN ('sent', 'delivered')
+                            WHERE wa_message_id = %s
+                              AND status != 'error'
                             """,
                             (wamid,),
                         )
+                        updated = cur.rowcount
                     elif wa_status == "failed":
                         errors = s.get("errors") or []
                         reason = errors[0].get("message", "failed") if errors else "failed"
@@ -233,12 +236,16 @@ def _handle_wa_statuses(statuses: list):
                             """
                             UPDATE outbound_messages
                             SET status = 'error', error = %s
-                            WHERE wa_message_id = %s AND status NOT IN ('delivered', 'read')
+                            WHERE wa_message_id = %s
+                              AND status NOT IN ('delivered', 'read')
                             """,
                             (reason, wamid),
                         )
+                        updated = cur.rowcount
+                    else:
+                        updated = 0
 
-                    print(f"[WA STATUS] wamid={wamid} → {wa_status}", flush=True)
+                    print(f"[WA STATUS] wamid={wamid} → {wa_status} (rows updated: {updated})", flush=True)
 
             conn.commit()
         finally:
