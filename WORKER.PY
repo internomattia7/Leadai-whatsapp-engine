@@ -1,6 +1,6 @@
 import time
 from leadai_engine import get_conn
-from whatsapp_client import send_whatsapp_message
+from whatsapp_client import send_whatsapp_message, send_whatsapp_media
 
 POLL_SECONDS = 2
 
@@ -38,15 +38,37 @@ def _get_wa_credentials(conn, azienda_id: int):
     return wa_token, wa_phone_number_id
 
 
-def send_message(conn, azienda_id: int, channel: str, contact_key: str, body: str) -> str | None:
+def send_message(
+    conn,
+    azienda_id,
+    channel: str,
+    contact_key: str,
+    body: str,
+    msg_type: str = "text",
+    media_id: str = None,
+    mime_type: str = None,
+    filename: str = None,
+    caption: str = None,
+) -> str | None:
     """
-    Invia un messaggio sul canale specificato.
+    Invia un messaggio sul canale specificato (testo o media).
     Restituisce il wamid (wa_message_id) ricevuto da Meta, o None se non disponibile.
     """
     if channel == "whatsapp":
         wa_token, wa_phone_number_id = _get_wa_credentials(conn, azienda_id)
-        to = contact_key.removeprefix("wa:")
-        resp = send_whatsapp_message(to, body, wa_token, wa_phone_number_id)
+        to = contact_key.removeprefix("wa:").removeprefix("+")
+        if msg_type == "text":
+            resp = send_whatsapp_message(to, body, wa_token, wa_phone_number_id)
+        else:
+            resp = send_whatsapp_media(
+                to=to,
+                wa_token=wa_token,
+                phone_number_id=wa_phone_number_id,
+                msg_type=msg_type,
+                media_id=media_id,
+                caption=caption or body or None,
+                filename=filename,
+            )
         try:
             return resp.json()["messages"][0]["id"]
         except Exception:
@@ -65,7 +87,8 @@ def main():
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT id, azienda_id, channel, contact_key, body
+                    SELECT id, azienda_id, channel, contact_key, body,
+                           msg_type, media_id, mime_type, filename, caption
                     FROM outbound_messages
                     WHERE status = 'queued'
                       AND send_after <= NOW()
@@ -77,9 +100,17 @@ def main():
 
                 rows = cur.fetchall()
 
-                for msg_id, azienda_id, channel, contact_key, body in rows:
+                for msg_id, azienda_id, channel, contact_key, body, \
+                        msg_type, media_id, mime_type, filename, caption in rows:
                     try:
-                        wamid = send_message(conn, azienda_id, channel, contact_key, body)
+                        wamid = send_message(
+                            conn, azienda_id, channel, contact_key, body,
+                            msg_type=msg_type or "text",
+                            media_id=media_id,
+                            mime_type=mime_type,
+                            filename=filename,
+                            caption=caption,
+                        )
 
                         cur.execute(
                             """

@@ -8,7 +8,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import uvicorn
 
-from fastapi import FastAPI, Depends, HTTPException, Request, Form
+from fastapi import FastAPI, Depends, HTTPException, Request, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 
 from dotenv import load_dotenv 
@@ -324,6 +324,93 @@ def send_whatsapp_message(
     return r
 
 
+# ─── Media helpers (WhatsApp Cloud API) ────────────────────────────────────
+
+UPLOADS_DIR = Path(__file__).resolve().parent / "uploads"
+UPLOADS_DIR.mkdir(exist_ok=True)
+
+
+def _wa_upload_media(file_bytes: bytes, mime_type: str, filename: str,
+                     wa_token: str, phone_number_id: str,
+                     graph_version: str = "v19.0") -> str:
+    """Upload media to Meta → returns media_id."""
+    url = f"https://graph.facebook.com/{graph_version}/{phone_number_id}/media"
+    r = requests.post(
+        url,
+        headers={"Authorization": f"Bearer {wa_token}"},
+        data={"messaging_product": "whatsapp"},
+        files={"file": (filename, file_bytes, mime_type)},
+        timeout=60,
+    )
+    print(f"[WA UPLOAD] status={r.status_code} body={r.text[:300]}", flush=True)
+    r.raise_for_status()
+    return r.json()["id"]
+
+
+def _wa_get_media_url(media_id: str, wa_token: str,
+                      graph_version: str = "v19.0") -> str:
+    """Resolve media_id → temporary download URL."""
+    url = f"https://graph.facebook.com/{graph_version}/{media_id}"
+    r = requests.get(url, headers={"Authorization": f"Bearer {wa_token}"}, timeout=15)
+    r.raise_for_status()
+    return r.json()["url"]
+
+
+def _wa_download_media(media_url: str, wa_token: str) -> bytes:
+    """Download raw bytes from a Meta media URL."""
+    r = requests.get(media_url, headers={"Authorization": f"Bearer {wa_token}"}, timeout=60)
+    r.raise_for_status()
+    return r.content
+
+
+def _download_inbound_media_bg(
+    media_id: str,
+    wa_token: str,
+    azienda_id,
+    msg_id: str,
+    mime_type: str,
+    filename: str,
+    graph_version: str = "v19.0",
+):
+    """Background thread: download inbound media and save to disk, then update DB."""
+    try:
+        media_url = _wa_get_media_url(media_id, wa_token, graph_version)
+        raw = _wa_download_media(media_url, wa_token)
+
+        ext = (filename or "").rsplit(".", 1)[-1] if filename and "." in (filename or "") else _ext_from_mime(mime_type)
+        date_dir = UPLOADS_DIR / "inbound" / str(azienda_id) / datetime.utcnow().strftime("%Y%m%d")
+        date_dir.mkdir(parents=True, exist_ok=True)
+        save_name = f"{media_id}.{ext}"
+        dest = date_dir / save_name
+        dest.write_bytes(raw)
+
+        local_path = f"/uploads/inbound/{azienda_id}/{datetime.utcnow().strftime('%Y%m%d')}/{save_name}"
+        print(f"[MEDIA DL] saved {dest} ({len(raw)} bytes)", flush=True)
+
+        conn = get_conn()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE wa_inbound_messages SET local_path=%s WHERE msg_id=%s",
+                    (local_path, msg_id),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"[MEDIA DL ERROR] media_id={media_id}: {e}", flush=True)
+
+
+def _ext_from_mime(mime_type: str) -> str:
+    _map = {
+        "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
+        "image/gif": "gif", "application/pdf": "pdf",
+        "audio/ogg": "ogg", "audio/mpeg": "mp3",
+        "video/mp4": "mp4",
+    }
+    return _map.get(mime_type or "", "bin")
+
+
 # ====== APP ======
 app = FastAPI(title="LeadAI")
 
@@ -434,10 +521,24 @@ async def wa_events(request: Request):
         msg_type = msg0.get("type")
 
         text = None
+        media_id = None
+        mime_type = None
+        filename = None
+
         if msg_type == "text":
             text = (msg0.get("text") or {}).get("body")
+        elif msg_type in ("image", "document", "audio", "video", "sticker"):
+            media_block = msg0.get(msg_type) or {}
+            media_id = media_block.get("id")
+            mime_type = media_block.get("mime_type")
+            filename = media_block.get("filename")  # documents only
+            caption = media_block.get("caption")
+            text = caption or f"[{msg_type}]"
 
-        if not msg_id or not from_wa or not text:
+        if not msg_id or not from_wa:
+            return {"ok": True}
+        # Require at least a text or a known media_id
+        if not text and not media_id:
             return {"ok": True}
 
     except Exception as e:
@@ -482,10 +583,13 @@ async def wa_events(request: Request):
             # 3) salva inbound
             cur.execute(
                 """
-                INSERT INTO wa_inbound_messages (msg_id, phone_number_id, from_wa, text, created_at)
-                VALUES (%s, %s, %s, %s, now())
+                INSERT INTO wa_inbound_messages
+                    (msg_id, phone_number_id, from_wa, text, created_at,
+                     msg_type, media_id, mime_type, filename)
+                VALUES (%s, %s, %s, %s, now(), %s, %s, %s, %s)
                 """,
-                (msg_id, phone_number_id, from_wa, text),
+                (msg_id, phone_number_id, from_wa, text,
+                 msg_type or "text", media_id, mime_type, filename),
             )
 
             # 4) upsert contatto (ON CONFLICT per evitare race condition su contact_key univoco)
@@ -521,18 +625,27 @@ async def wa_events(request: Request):
             daemon=True,
         ).start()
 
-        # 7) genera reply ([TEST] nel testo → strip prima di passare all'engine)
-        is_test = "[TEST]" in (text or "")
-        clean_text = text.replace("[TEST]", "").strip() if is_test else text
-        if is_test:
-            print(f"[TEST_MODE ON: bypass anti-spam] contact_key={contact_key}", flush=True)
+        # 6b) if media → download in background
+        if media_id:
+            threading.Thread(
+                target=_download_inbound_media_bg,
+                args=(media_id, wa_token, azienda_id, msg_id, mime_type, filename, GRAPH_VERSION),
+                daemon=True,
+            ).start()
 
-        reply = process_text_message(conn, contact_key, clean_text)
-        print("RISPOSTA AI:", reply)
+        # 7) genera reply solo per messaggi di testo (non per media puri)
+        if msg_type == "text":
+            is_test = "[TEST]" in (text or "")
+            clean_text = text.replace("[TEST]", "").strip() if is_test else text
+            if is_test:
+                print(f"[TEST_MODE ON: bypass anti-spam] contact_key={contact_key}", flush=True)
 
-        # 8) invia reply
-        if reply:
-            send_whatsapp_message(from_wa, reply, wa_token, wa_phone_number_id, graph_version=GRAPH_VERSION)
+            reply = process_text_message(conn, contact_key, clean_text)
+            print("RISPOSTA AI:", reply)
+
+            # 8) invia reply
+            if reply:
+                send_whatsapp_message(from_wa, reply, wa_token, wa_phone_number_id, graph_version=GRAPH_VERSION)
 
         return {"ok": True}
 
@@ -1092,6 +1205,7 @@ DB = {
 
 templates = Jinja2Templates(directory="templates")
 app.mount("/static", StaticFiles(directory="static"), name="static")
+app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 
 
 def get_conn():
@@ -2176,7 +2290,11 @@ def api_messages(contact_key: str, user=Depends(get_current_user)):
                        msg_id AS id,
                        text AS body,
                        created_at AS ts,
-                       CASE WHEN read_at IS NULL THEN 'unread' ELSE 'read' END AS status
+                       CASE WHEN read_at IS NULL THEN 'unread' ELSE 'read' END AS status,
+                       COALESCE(msg_type, 'text') AS msg_type,
+                       local_path AS media_url,
+                       mime_type,
+                       filename
                 FROM wa_inbound_messages
                 WHERE from_wa = %s
                 UNION ALL
@@ -2184,7 +2302,11 @@ def api_messages(contact_key: str, user=Depends(get_current_user)):
                        id::text AS id,
                        body,
                        COALESCE(sent_at, send_after) AS ts,
-                       status
+                       status,
+                       COALESCE(msg_type, 'text') AS msg_type,
+                       NULL AS media_url,
+                       mime_type,
+                       filename
                 FROM outbound_messages
                 WHERE contact_key IN (%s, %s)
                   AND azienda_id IN %s
@@ -2200,8 +2322,14 @@ def api_messages(contact_key: str, user=Depends(get_current_user)):
 
     print(f"[DEBUG api_messages] phone={repr(phone)} send_az={send_azienda_id} rows={len(rows)}", flush=True)
     return [
-        {"direction": r[0], "id": r[1], "body": r[2],
-         "ts": r[3].isoformat() if r[3] else None, "status": r[4]}
+        {
+            "direction": r[0], "id": r[1], "body": r[2],
+            "ts": r[3].isoformat() if r[3] else None, "status": r[4],
+            "msg_type": r[5] or "text",
+            "media_url": r[6],
+            "mime_type": r[7],
+            "filename": r[8],
+        }
         for r in rows
     ]
 
@@ -2255,6 +2383,102 @@ def api_send(contact_key: str, body: SendMessageIn, user=Depends(get_current_use
     finally:
         conn.close()
     return {"ok": True, "id": msg_id}
+
+
+@app.post("/api/chats/{contact_key:path}/send-media")
+async def api_send_media(
+    contact_key: str,
+    file: UploadFile = File(...),
+    caption: str = Form(default=""),
+    user=Depends(get_current_user),
+):
+    """
+    Upload a media file → Meta media_id → enqueue in outbound_messages.
+    Accepts: image/jpeg, image/png, image/webp, application/pdf, audio/ogg, audio/mpeg, video/mp4
+    """
+    user_azienda_id = user["azienda_id"]
+    canonical_key = normalize_contact_key("whatsapp", contact_key)
+    phone = phone_from_key(canonical_key)
+
+    mime = file.content_type or "application/octet-stream"
+    fname = file.filename or "upload"
+
+    # Determine WhatsApp media type from MIME
+    _mime_to_wa = {
+        "image/jpeg": "image", "image/png": "image", "image/webp": "image", "image/gif": "image",
+        "video/mp4": "video", "video/3gp": "video",
+        "audio/ogg": "audio", "audio/mpeg": "audio", "audio/aac": "audio",
+        "application/pdf": "document",
+        "application/vnd.ms-excel": "document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "document",
+        "application/msword": "document",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "document",
+    }
+    wa_type = _mime_to_wa.get(mime)
+    if not wa_type:
+        raise HTTPException(status_code=415, detail=f"Unsupported media type: {mime}")
+
+    file_bytes = await file.read()
+
+    conn = get_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ci.azienda_id, ci.wa_access_token, ci.wa_phone_number_id
+                FROM wa_inbound_messages wim
+                JOIN company_integrations ci
+                    ON ci.wa_phone_number_id = wim.phone_number_id
+                   AND ci.channel = 'whatsapp'
+                   AND ci.is_enabled = TRUE
+                WHERE wim.from_wa = %s
+                ORDER BY wim.created_at DESC
+                LIMIT 1
+                """,
+                (phone,),
+            )
+            row = cur.fetchone()
+            if row:
+                send_azienda_id, wa_token, wa_phone_number_id = row
+            else:
+                # Fall back to user's company credentials
+                send_azienda_id = user_azienda_id
+                cur.execute(
+                    """
+                    SELECT wa_access_token, wa_phone_number_id
+                    FROM company_integrations
+                    WHERE azienda_id = %s AND channel = 'whatsapp' AND is_enabled = TRUE
+                    LIMIT 1
+                    """,
+                    (user_azienda_id,),
+                )
+                cred_row = cur.fetchone()
+                if not cred_row:
+                    raise HTTPException(status_code=422, detail="No WhatsApp credentials found")
+                wa_token, wa_phone_number_id = cred_row
+
+        # Upload to Meta (outside cursor context, can be slow)
+        media_id = _wa_upload_media(file_bytes, mime, fname, wa_token, wa_phone_number_id, GRAPH_VERSION)
+
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO outbound_messages
+                    (azienda_id, channel, contact_key, body, status, send_after,
+                     msg_type, media_id, mime_type, filename, caption)
+                VALUES (%s, 'whatsapp', %s, %s, 'queued', NOW(),
+                        %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (send_azienda_id, canonical_key, caption or f"[{wa_type}]",
+                 wa_type, media_id, mime, fname, caption or None),
+            )
+            msg_id = cur.fetchone()[0]
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"ok": True, "id": msg_id, "media_id": media_id, "msg_type": wa_type}
 
 
 @app.post("/api/chats/new")

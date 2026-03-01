@@ -32,3 +32,17 @@ export async function saveCompanySettings(data: { business_phone?: string }): Pr
 export async function updateContactName(contactKey: string, nome_cliente: string): Promise<void> {
   await client.patch(`/chats/${encodeURIComponent(contactKey)}/contact`, { nome_cliente })
 }
+
+export async function sendMedia(
+  contactKey: string,
+  file: File,
+  caption?: string,
+): Promise<{ id: number; media_id: string; msg_type: string }> {
+  const fd = new FormData()
+  fd.append('file', file)
+  if (caption) fd.append('caption', caption)
+  const res = await client.post(`/chats/${encodeURIComponent(contactKey)}/send-media`, fd, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return res.data
+}

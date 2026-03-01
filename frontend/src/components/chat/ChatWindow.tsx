@@ -5,7 +5,7 @@ import MessageInput from './MessageInput'
 import Avatar from '../ui/Avatar'
 import { useMessages } from '../../hooks/useMessages'
 import type { Chat, Message } from '../../types'
-import { sendMessage, markRead } from '../../api/chats'
+import { sendMessage, sendMedia, markRead } from '../../api/chats'
 
 interface ChatWindowProps {
   chat: Chat | null
@@ -76,6 +76,7 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
       body: text,
       ts: new Date().toISOString(),
       status: 'pending',
+      msg_type: 'text',
     }
 
     // Show bubble immediately
@@ -94,6 +95,45 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
       setOptimisticMsgs(prev =>
         prev.map(m => m.id === tempId ? { ...m, status: 'error' } : m)
       )
+    }
+  }
+
+  const handleSendMedia = async (file: File) => {
+    const tempId = `tmp-media-${Date.now()}`
+    const isImage = file.type.startsWith('image/')
+    const waType = isImage ? 'image'
+                 : file.type.startsWith('video/') ? 'video'
+                 : file.type.startsWith('audio/') ? 'audio'
+                 : 'document'
+
+    // Optimistic preview: show local object URL for images
+    const localUrl = isImage ? URL.createObjectURL(file) : null
+    const tempMsg: Message = {
+      id: tempId,
+      direction: 'out',
+      body: file.name,
+      ts: new Date().toISOString(),
+      status: 'pending',
+      msg_type: waType as Message['msg_type'],
+      media_url: localUrl,
+      mime_type: file.type,
+      filename: file.name,
+    }
+
+    setOptimisticMsgs(prev => [...prev, tempMsg])
+
+    try {
+      await sendMedia(chat.contact_key, file)
+      setOptimisticMsgs(prev =>
+        prev.map(m => m.id === tempId ? { ...m, status: 'sent' } : m)
+      )
+      refresh()
+    } catch {
+      setOptimisticMsgs(prev =>
+        prev.map(m => m.id === tempId ? { ...m, status: 'error' } : m)
+      )
+    } finally {
+      if (localUrl) URL.revokeObjectURL(localUrl)
     }
   }
 
@@ -149,7 +189,7 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
       </div>
 
       {/* Input */}
-      <MessageInput onSend={handleSend} />
+      <MessageInput onSend={handleSend} onSendMedia={handleSendMedia} />
     </div>
   )
 }

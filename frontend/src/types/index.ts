@@ -26,4 +26,8 @@ export interface Message {
   body: string
   ts: string | null
   status: string
+  msg_type?: 'text' | 'image' | 'document' | 'audio' | 'video'
+  media_url?: string | null
+  mime_type?: string | null
+  filename?: string | null
 }
