@@ -2468,30 +2468,26 @@ async def api_send_media(
                     raise HTTPException(status_code=422, detail="No WhatsApp credentials found")
                 wa_token, wa_phone_number_id = cred_row
 
-        # Save file locally FIRST — so we always have a local_path regardless of Meta outcome
-        date_str = datetime.utcnow().strftime("%Y%m%d")
-        ext = (fname.rsplit(".", 1)[-1] if fname and "." in fname else _ext_from_mime(mime))
-        out_dir = UPLOADS_DIR / "outbound" / str(send_azienda_id) / date_str
-        out_dir.mkdir(parents=True, exist_ok=True)
-        # Use a temporary name; will rename to media_id.ext after Meta responds
-        import uuid as _uuid
-        tmp_name = f"{_uuid.uuid4().hex}.{ext}"
-        tmp_dest = out_dir / tmp_name
-        tmp_dest.write_bytes(file_bytes)
-        print(f"[SEND-MEDIA] saved locally → {tmp_dest} ({len(file_bytes)}B)", flush=True)
-
-        # Upload to Meta
-        print(f"[SEND-MEDIA] uploading fname={fname!r} mime={mime!r} size={len(file_bytes)}B "
-              f"phone_id={wa_phone_number_id}", flush=True)
+        # ── Step 1: Upload to Meta first (we need media_id before we can name the file) ──
+        print(f"[SEND-MEDIA] start fname={fname!r} mime={mime!r} size={len(file_bytes)}B "
+              f"azienda={send_azienda_id} phone_id={wa_phone_number_id}", flush=True)
         media_id = _wa_upload_media(file_bytes, mime, fname, wa_token, wa_phone_number_id, GRAPH_VERSION)
         print(f"[SEND-MEDIA] Meta upload OK → media_id={media_id!r}", flush=True)
 
-        # Rename local file to media_id.ext for stable reference
-        final_name = f"{media_id}.{ext}"
-        final_dest = out_dir / final_name
-        tmp_dest.replace(final_dest)  # replace() is atomic and works on Windows even if dest exists
-        local_path = f"/uploads/outbound/{send_azienda_id}/{date_str}/{final_name}"
-        print(f"[SEND-MEDIA] local_path={local_path!r}", flush=True)
+        # ── Step 2: Save locally using media_id as filename ──
+        local_path = None
+        try:
+            date_str = datetime.utcnow().strftime("%Y%m%d")
+            ext = (fname.rsplit(".", 1)[-1] if fname and "." in fname else _ext_from_mime(mime))
+            out_dir = UPLOADS_DIR / "outbound" / str(send_azienda_id) / date_str
+            out_dir.mkdir(parents=True, exist_ok=True)
+            final_dest = out_dir / f"{media_id}.{ext}"
+            final_dest.write_bytes(file_bytes)
+            local_path = f"/uploads/outbound/{send_azienda_id}/{date_str}/{media_id}.{ext}"
+            print(f"[SEND-MEDIA] saved locally → {final_dest} ({len(file_bytes)}B)", flush=True)
+        except Exception as _save_err:
+            print(f"[SEND-MEDIA] WARNING: local save failed: {_save_err!r}", flush=True)
+            # Continue — message is still queued with NULL local_path; can be backfilled later
 
         with conn.cursor() as cur:
             cur.execute(
