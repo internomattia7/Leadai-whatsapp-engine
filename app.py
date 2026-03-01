@@ -2489,7 +2489,7 @@ async def api_send_media(
         # Rename local file to media_id.ext for stable reference
         final_name = f"{media_id}.{ext}"
         final_dest = out_dir / final_name
-        tmp_dest.rename(final_dest)
+        tmp_dest.replace(final_dest)  # replace() is atomic and works on Windows even if dest exists
         local_path = f"/uploads/outbound/{send_azienda_id}/{date_str}/{final_name}"
         print(f"[SEND-MEDIA] local_path={local_path!r}", flush=True)
 
