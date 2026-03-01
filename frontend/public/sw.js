@@ -1,4 +1,4 @@
-const CACHE = 'venomapp-v1'
+const CACHE = 'venomapp-v2'
 const SHELL = ['/', '/app/inbox']
 
 self.addEventListener('install', e => {

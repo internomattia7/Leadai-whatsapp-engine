@@ -2315,7 +2315,7 @@ def api_messages(contact_key: str, user=Depends(get_current_user)):
                        COALESCE(sent_at, send_after) AS ts,
                        status,
                        COALESCE(msg_type, 'text') AS msg_type,
-                       NULL AS media_url,
+                       local_path AS media_url,
                        mime_type,
                        filename
                 FROM outbound_messages
@@ -2468,31 +2468,50 @@ async def api_send_media(
                     raise HTTPException(status_code=422, detail="No WhatsApp credentials found")
                 wa_token, wa_phone_number_id = cred_row
 
-        # Upload to Meta (outside cursor context, can be slow)
+        # Save file locally FIRST — so we always have a local_path regardless of Meta outcome
+        date_str = datetime.utcnow().strftime("%Y%m%d")
+        ext = (fname.rsplit(".", 1)[-1] if fname and "." in fname else _ext_from_mime(mime))
+        out_dir = UPLOADS_DIR / "outbound" / str(send_azienda_id) / date_str
+        out_dir.mkdir(parents=True, exist_ok=True)
+        # Use a temporary name; will rename to media_id.ext after Meta responds
+        import uuid as _uuid
+        tmp_name = f"{_uuid.uuid4().hex}.{ext}"
+        tmp_dest = out_dir / tmp_name
+        tmp_dest.write_bytes(file_bytes)
+        print(f"[SEND-MEDIA] saved locally → {tmp_dest} ({len(file_bytes)}B)", flush=True)
+
+        # Upload to Meta
         print(f"[SEND-MEDIA] uploading fname={fname!r} mime={mime!r} size={len(file_bytes)}B "
               f"phone_id={wa_phone_number_id}", flush=True)
         media_id = _wa_upload_media(file_bytes, mime, fname, wa_token, wa_phone_number_id, GRAPH_VERSION)
         print(f"[SEND-MEDIA] Meta upload OK → media_id={media_id!r}", flush=True)
+
+        # Rename local file to media_id.ext for stable reference
+        final_name = f"{media_id}.{ext}"
+        final_dest = out_dir / final_name
+        tmp_dest.rename(final_dest)
+        local_path = f"/uploads/outbound/{send_azienda_id}/{date_str}/{final_name}"
+        print(f"[SEND-MEDIA] local_path={local_path!r}", flush=True)
 
         with conn.cursor() as cur:
             cur.execute(
                 """
                 INSERT INTO outbound_messages
                     (azienda_id, channel, contact_key, body, status, send_after,
-                     msg_type, media_id, mime_type, filename, caption)
+                     msg_type, media_id, mime_type, filename, caption, local_path)
                 VALUES (%s, 'whatsapp', %s, %s, 'queued', NOW(),
-                        %s, %s, %s, %s, %s)
+                        %s, %s, %s, %s, %s, %s)
                 RETURNING id
                 """,
                 (send_azienda_id, canonical_key, caption or f"[{wa_type}]",
-                 wa_type, media_id, mime, fname, caption or None),
+                 wa_type, media_id, mime, fname, caption or None, local_path),
             )
             msg_id = cur.fetchone()[0]
         conn.commit()
     finally:
         conn.close()
 
-    return {"ok": True, "id": msg_id, "media_id": media_id, "msg_type": wa_type}
+    return {"ok": True, "id": msg_id, "media_id": media_id, "msg_type": wa_type, "local_path": local_path}
 
 
 @app.post("/api/chats/new")

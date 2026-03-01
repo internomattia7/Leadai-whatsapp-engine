@@ -37,9 +37,9 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
   }, [chat?.contact_key])
 
   // When server messages update, remove any optimistic message that is now
-  // covered by a real server message (matched by body + direction + time window).
-  // This prevents the message from ever disappearing during a refresh race condition:
-  // the optimistic stays visible until the server actually confirms it.
+  // covered by a real server message.
+  // Text: matched by body + time window.
+  // Media: matched by msg_type + time window (body differs: filename vs [image]).
   useEffect(() => {
     setOptimisticMsgs(prev => {
       if (prev.length === 0) return prev
@@ -47,13 +47,14 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
         // Always keep error messages visible so user sees the failure
         if (opt.status === 'error') return true
         const optTime = new Date(opt.ts || 0).getTime()
-        // Remove only if a matching real message appeared in server data
-        const matched = messages.some(
-          m =>
-            m.direction === 'out' &&
-            m.body === opt.body &&
-            Math.abs(new Date(m.ts || 0).getTime() - optTime) < 30_000
-        )
+        const matched = messages.some(m => {
+          if (m.direction !== 'out') return false
+          if (Math.abs(new Date(m.ts || 0).getTime() - optTime) >= 30_000) return false
+          // Media match: same msg_type within time window
+          if (opt.msg_type && opt.msg_type !== 'text') return m.msg_type === opt.msg_type
+          // Text match: same body
+          return m.body === opt.body
+        })
         return !matched
       })
     })
@@ -127,12 +128,15 @@ export default function ChatWindow({ chat, onBack }: ChatWindowProps) {
       setOptimisticMsgs(prev =>
         prev.map(m => m.id === tempId ? { ...m, status: 'sent' } : m)
       )
-      refresh()
+      // Await refresh so the server message (with local_path) arrives BEFORE
+      // we revoke the blob URL — prevents a broken-image flash during transition
+      await refresh()
     } catch {
       setOptimisticMsgs(prev =>
         prev.map(m => m.id === tempId ? { ...m, status: 'error' } : m)
       )
     } finally {
+      // Blob URL is no longer needed: server message now carries local_path
       if (localUrl) URL.revokeObjectURL(localUrl)
     }
   }
