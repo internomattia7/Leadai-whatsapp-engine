@@ -20,13 +20,15 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   const url = new URL(e.request.url)
 
-  // Network-first for API calls
-  if (url.pathname.startsWith('/api/')) {
-    e.respondWith(fetch(e.request).catch(() => new Response('', { status: 503 })))
+  // Network-only for API calls and media — never serve from cache or fallback to home
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/uploads/')) {
+    e.respondWith(
+      fetch(e.request).catch(() => new Response('', { status: 503 }))
+    )
     return
   }
 
-  // Cache-first for everything else
+  // Cache-first for app shell (JS/CSS/icons)
   e.respondWith(
     caches.match(e.request).then(cached => {
       if (cached) return cached
@@ -35,7 +37,7 @@ self.addEventListener('fetch', e => {
           caches.open(CACHE).then(c => c.put(e.request, res.clone()))
         }
         return res
-      }).catch(() => caches.match('/'))
+      }).catch(() => new Response('', { status: 404 })) // ← 404 not home, for missing assets
     })
   )
 })

@@ -373,20 +373,30 @@ def _download_inbound_media_bg(
     graph_version: str = "v19.0",
 ):
     """Background thread: download inbound media and save to disk, then update DB."""
+    print(f"[MEDIA DL] START media_id={media_id!r} msg_id={msg_id!r} mime={mime_type!r}", flush=True)
     try:
+        # Step 1: resolve media_id → temporary Meta URL
+        print(f"[MEDIA DL] fetching URL from Graph API...", flush=True)
         media_url = _wa_get_media_url(media_id, wa_token, graph_version)
-        raw = _wa_download_media(media_url, wa_token)
+        print(f"[MEDIA DL] got URL={media_url[:80]}...", flush=True)
 
-        ext = (filename or "").rsplit(".", 1)[-1] if filename and "." in (filename or "") else _ext_from_mime(mime_type)
-        date_dir = UPLOADS_DIR / "inbound" / str(azienda_id) / datetime.utcnow().strftime("%Y%m%d")
+        # Step 2: download binary
+        raw = _wa_download_media(media_url, wa_token)
+        print(f"[MEDIA DL] downloaded {len(raw)} bytes", flush=True)
+
+        # Step 3: build save path — compute date ONCE to avoid midnight race
+        date_str = datetime.utcnow().strftime("%Y%m%d")
+        ext = (filename.rsplit(".", 1)[-1] if filename and "." in filename
+               else _ext_from_mime(mime_type))
+        date_dir = UPLOADS_DIR / "inbound" / str(azienda_id) / date_str
         date_dir.mkdir(parents=True, exist_ok=True)
         save_name = f"{media_id}.{ext}"
         dest = date_dir / save_name
         dest.write_bytes(raw)
+        local_path = f"/uploads/inbound/{azienda_id}/{date_str}/{save_name}"
+        print(f"[MEDIA DL] saved → {local_path}", flush=True)
 
-        local_path = f"/uploads/inbound/{azienda_id}/{datetime.utcnow().strftime('%Y%m%d')}/{save_name}"
-        print(f"[MEDIA DL] saved {dest} ({len(raw)} bytes)", flush=True)
-
+        # Step 4: update DB
         conn = get_conn()
         try:
             with conn.cursor() as cur:
@@ -395,10 +405,11 @@ def _download_inbound_media_bg(
                     (local_path, msg_id),
                 )
             conn.commit()
+            print(f"[MEDIA DL] DB updated OK for msg_id={msg_id!r}", flush=True)
         finally:
             conn.close()
     except Exception as e:
-        print(f"[MEDIA DL ERROR] media_id={media_id}: {e}", flush=True)
+        print(f"[MEDIA DL ERROR] media_id={media_id!r}: {type(e).__name__}: {e}", flush=True)
 
 
 def _ext_from_mime(mime_type: str) -> str:

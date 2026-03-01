@@ -1,4 +1,5 @@
-import { Check, CheckCheck, Clock, FileText, Download } from 'lucide-react'
+import { useState } from 'react'
+import { Check, CheckCheck, Clock, FileText, Download, X } from 'lucide-react'
 import type { Message } from '../../types'
 
 interface MessageBubbleProps {
@@ -11,42 +12,66 @@ function formatTs(ts: string | null) {
 }
 
 function StatusIcon({ status }: { status: string }) {
-  // ⏳ pending/queued/sent → waiting for delivery receipt
   if (status === 'pending' || status === 'queued' || status === 'sent') {
     return <Clock size={12} className="text-white/50" />
   }
-  // ✓✓ green → read
   if (status === 'read') {
     return <CheckCheck size={12} className="text-green-400" />
   }
-  // ✓✓ gray → delivered
   if (status === 'delivered') {
     return <CheckCheck size={12} className="text-white/60" />
   }
-  // ✓ red → error (not sent)
   if (status === 'error' || status === 'failed') {
     return <Check size={12} className="text-red-400" />
   }
   return null
 }
 
+/** Full-screen lightbox for images — stays inside the PWA, no new tab */
+function ImageLightbox({ src, onClose }: { src: string; onClose: () => void }) {
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+      onClick={onClose}
+    >
+      <button
+        className="absolute top-4 right-4 text-white/80 hover:text-white"
+        onClick={onClose}
+        aria-label="Chiudi"
+      >
+        <X size={28} />
+      </button>
+      <img
+        src={src}
+        alt="immagine"
+        className="max-w-full max-h-full object-contain"
+        onClick={e => e.stopPropagation()}
+      />
+    </div>
+  )
+}
+
 function MediaContent({ message }: { message: Message }) {
   const { msg_type, media_url, filename, body } = message
+  const [lightbox, setLightbox] = useState(false)
 
   if (msg_type === 'image' && media_url) {
     return (
-      <div className="mb-1">
-        <img
-          src={media_url}
-          alt={filename || 'immagine'}
-          className="rounded-xl max-w-full max-h-60 object-cover cursor-pointer"
-          onClick={() => window.open(media_url, '_blank')}
-          loading="lazy"
-        />
-        {body && body !== '[image]' && (
-          <p className="leading-relaxed whitespace-pre-wrap mt-1 text-sm">{body}</p>
-        )}
-      </div>
+      <>
+        {lightbox && <ImageLightbox src={media_url} onClose={() => setLightbox(false)} />}
+        <div className="mb-1">
+          <img
+            src={media_url}
+            alt={filename || 'immagine'}
+            className="rounded-xl max-w-full max-h-60 object-cover cursor-pointer"
+            onClick={() => setLightbox(true)}
+            loading="lazy"
+          />
+          {body && body !== '[image]' && (
+            <p className="leading-relaxed whitespace-pre-wrap mt-1 text-sm">{body}</p>
+          )}
+        </div>
+      </>
     )
   }
 
